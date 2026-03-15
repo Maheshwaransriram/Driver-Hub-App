@@ -1,0 +1,86 @@
+function Dashboard({ rides, settings, onDelete }) {
+  const todayRides = rides.filter(r => new Date(r.timestamp).toDateString() === new Date().toDateString());
+  const gross = todayRides.reduce((acc, r) => acc + r.fare, 0);
+  const totalKm = todayRides.reduce((acc, r) => acc + r.dist, 0);
+  const commission = todayRides.reduce((acc, r) => acc + (r.commAmt || 0), 0); // Back in!
+  const taxes = todayRides.reduce((acc, r) => acc + (r.taxAmt || 0), 0);
+  const fuelCost = todayRides.reduce((acc, r) => acc + (r.fuelCost || 0), 0);
+  const net = todayRides.reduce((acc, r) => acc + r.net, 0);
+
+  const incomeProgress = Math.min((net / settings.dailyGoal) * 100, 100);
+
+  return (
+    <div style={{ padding: '20px' }}>
+      <h2 style={{ margin: '0 0 20px 0' }}>Today's View</h2>
+      
+      {/* 1. TOP STATS (Clean Header) */}
+      <div style={{ display: 'flex', gap: '12px', marginBottom: '15px' }}>
+        <div style={{ flex: 1.5, background: 'linear-gradient(135deg, #00D27A 0%, #00A35F 100%)', padding: '20px', borderRadius: '24px', color: '#061810' }}>
+          <p style={{ fontSize: '11px', fontWeight: 'bold' }}>NET PROFIT</p>
+          <h1 style={{ fontSize: '38px', margin: '5px 0' }}>₹{net.toFixed(0)}</h1>
+          <p style={{ fontSize: '10px', fontWeight: 'bold', opacity: 0.8 }}>TAKE HOME</p>
+        </div>
+        <div style={{ flex: 1, background: '#152030', padding: '20px', borderRadius: '24px', border: '1.5px solid #1E2D3D', display: 'flex', flexDirection: 'column', justifyContent: 'center', textAlign: 'center' }}>
+          <p style={{ fontSize: '11px', color: '#8899AA', fontWeight: 'bold' }}>RIDES</p>
+          <h1 style={{ fontSize: '38px', margin: '5px 0', color: 'white' }}>{todayRides.length}</h1>
+          <p style={{ fontSize: '10px', color: '#00D27A', fontWeight: 'bold' }}>COMPLETED</p>
+        </div>
+      </div>
+
+      {/* 2. INCOME PROGRESS BAR WITH MILESTONES */}
+      <div style={{ ...styles.card, background: '#111B28' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px', alignItems: 'center' }}>
+          <span style={{ fontWeight: 'bold', fontSize: '14px' }}>💰 Income Goal</span>
+          <span style={{ fontWeight: 'bold', color: '#00D27A', fontSize: '14px' }}>₹{net.toFixed(0)} / ₹{settings.dailyGoal}</span>
+        </div>
+        
+        <div style={{ position: 'relative', width: '100%', height: '14px', background: '#080C12', borderRadius: '10px' }}>
+          {/* Progress fill */}
+          <div style={{ width: `${incomeProgress}%`, height: '100%', background: '#00D27A', borderRadius: '10px', transition: 'width 0.8s ease-out', boxShadow: '0 0 12px rgba(0,210,122,0.3)' }} />
+          
+          {/* Milestone Markers */}
+          {[25, 50, 75].map(m => (
+            <div key={m} style={{ 
+              position: 'absolute', left: `${m}%`, top: '50%', transform: 'translate(-50%, -50%)',
+              width: '6px', height: '6px', borderRadius: '50%', 
+              background: incomeProgress >= m ? '#061810' : '#445566',
+              border: '1.5px solid #00D27A', zIndex: 2
+            }} />
+          ))}
+        </div>
+        
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '10px' }}>
+          <span style={{ fontSize: '10px', color: '#445566', fontWeight: 'bold' }}>START</span>
+          <span style={{ fontSize: '10px', color: '#445566', fontWeight: 'bold' }}>50%</span>
+          <span style={{ fontSize: '10px', color: '#00D27A', fontWeight: 'bold' }}>GOAL</span>
+        </div>
+      </div>
+
+      {/* 3. ADDITIONAL STATS */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
+        <StatCard title="Gross" value={`₹${gross.toFixed(0)}`} icon="💵" />
+        <StatCard title="KM Driven" value={`${totalKm.toFixed(1)}km`} icon="🛣️" />
+        <StatCard title="Comm." value={`₹${commission.toFixed(0)}`} icon="🏢" />
+        <StatCard title="Taxes" value={`₹${taxes.toFixed(0)}`} icon="🏛️" />
+      </div>
+
+      <h3 style={{ fontSize: '16px', marginBottom: '15px' }}>Recent Rides</h3>
+      {todayRides.length === 0 ? <p style={{ color: '#445566', textAlign: 'center', marginTop: '20px' }}>No rides logged today.</p> : 
+        todayRides.map(r => (
+          <div key={r.id} style={styles.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <span style={{ color: PLATFORM_COLORS[r.platform], fontWeight: 'bold' }}>{r.platform}</span>
+                <p style={{ fontSize: '11px', color: '#8899AA', marginTop: '4px' }}>{r.dist} km • {new Date(r.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                <span style={{ color: '#00D27A', fontWeight: 'bold' }}>+₹{r.net.toFixed(0)}</span>
+                <button onClick={() => onDelete(r.id)} style={{ background: 'none', border: 'none', color: '#FF4757', padding: '5px' }}>✕</button>
+              </div>
+            </div>
+          </div>
+        ))
+      }
+    </div>
+  );
+}
