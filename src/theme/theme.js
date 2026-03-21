@@ -4,7 +4,7 @@ export const themes = {
     card: '#FFFFFF',
     text: '#1A1C1E',
     subText: '#A3AED0',
-    accent: '#FF6B35', 
+    accent: '#FF6B35',
     accentGradient: 'linear-gradient(135deg, #FF8C42 0%, #FF6B35 100%)',
     border: '#E9EDF7',
     nav: 'rgba(255, 255, 255, 0.9)',
@@ -17,7 +17,7 @@ export const themes = {
     card: '#111C44',
     text: '#FFFFFF',
     subText: '#A3AED0',
-    accent: '#00D27A', 
+    accent: '#00D27A',
     accentGradient: 'linear-gradient(135deg, #00D27A 0%, #00A35F 100%)',
     border: '#1B254B',
     nav: 'rgba(17, 28, 68, 0.9)',
@@ -28,19 +28,17 @@ export const themes = {
 };
 
 export const globalStyles = {
-  // Acts as a mobile simulator on desktop
+  // Full-screen app view — no desktop simulator frame
   appWrapper: {
-    maxWidth: '480px',
-    margin: '0 auto',
+    width: '100%',
     minHeight: '100vh',
     position: 'relative',
-    boxShadow: '0 0 40px rgba(0,0,0,0.1)',
     fontFamily: "'Inter', sans-serif",
-    transition: 'all 0.3s ease',
+    transition: 'background 0.3s ease',
     overflowX: 'hidden',
   },
   container: {
-    paddingBottom: '100px',
+    paddingBottom: '90px',   // clears the 75px fixed nav + breathing room
     minHeight: '100vh',
   },
   card: {
@@ -51,13 +49,16 @@ export const globalStyles = {
     boxShadow: '0 4px 15px rgba(0,0,0,0.03)',
   },
   nav: {
-    position: 'absolute',
+    position: 'fixed',
     bottom: 0,
-    width: '100%',
-    display: 'flex',
+    left: 0,
+    right: 0,
     height: '75px',
-    borderTop: '1px solid',
-    zIndex: 100,
+    zIndex: 2000,          // sits above Leaflet map tiles (z-index 400)
+    display: 'flex',
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
     backdropFilter: 'blur(10px)',
   },
   btnPrimary: {
@@ -69,5 +70,5 @@ export const globalStyles = {
     cursor: 'pointer',
     fontSize: '16px',
     transition: 'transform 0.2s ease',
-  }
+  },
 };
