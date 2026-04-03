@@ -4,6 +4,8 @@ import { globalStyles } from '../theme/theme';
 
 export default function Dashboard({ rides, fuelPercentage, remainingRange, fuelValue, currentLiters, settings, theme, onDelete, onAddRide }) {
   
+  const [showAllRides, setShowAllRides] = useState(false);
+
   // --- CALCULATIONS ---
   const todayRides = rides.filter(r => new Date(r.timestamp).toDateString() === new Date().toDateString());
   const net        = todayRides.reduce((acc, r) => acc + (r.net    || 0), 0);
@@ -11,6 +13,9 @@ export default function Dashboard({ rides, fuelPercentage, remainingRange, fuelV
   const totalKm    = todayRides.reduce((acc, r) => acc + (r.dist   || 0), 0);
   const commission = todayRides.reduce((acc, r) => acc + (r.commAmt || 0), 0);
   const taxes      = todayRides.reduce((acc, r) => acc + (r.taxAmt  || 0), 0);
+
+  // All rides sorted newest first for history view
+  const displayRides = showAllRides ? [...rides] : todayRides;
 
   // --- GOAL TRACKING ---
   const dailyGoal      = settings.dailyGoal || 1000;
@@ -190,31 +195,78 @@ export default function Dashboard({ rides, fuelPercentage, remainingRange, fuelV
         </div>
       </div>
 
-      {/* ── 5. TODAY'S RIDES ───────────────────────────────────────────────── */}
-      <h3 style={{ fontSize: '18px', marginBottom: '16px', color: theme.text, fontWeight: '800' }}>
-        Today's Rides
-      </h3>
-      {todayRides.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '30px', color: theme.subText, backgroundColor: theme.card, borderRadius: '20px' }}>
-          No rides logged.
+      {/* ── 5. TODAY'S RIDES / HISTORY ─────────────────────────────────────── */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+        <h3 style={{ fontSize: '18px', color: theme.text, fontWeight: '800', margin: 0 }}>
+          {showAllRides ? 'Ride History' : "Today's Rides"}
+        </h3>
+        <div style={{ display: 'flex', gap: '0px', borderRadius: '10px', overflow: 'hidden', border: `1px solid ${theme.border}` }}>
+          {[['Today', false], ['All', true]].map(([label, val]) => (
+            <button
+              key={label}
+              onClick={() => setShowAllRides(val)}
+              style={{
+                padding: '6px 14px', border: 'none', cursor: 'pointer',
+                fontSize: '12px', fontWeight: '700',
+                background: showAllRides === val ? theme.accent : theme.card,
+                color: showAllRides === val ? '#fff' : theme.subText,
+                transition: 'all 0.2s',
+              }}
+            >{label}</button>
+          ))}
+        </div>
+      </div>
+
+      {displayRides.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '30px', color: theme.subText, backgroundColor: theme.card, borderRadius: '20px', marginBottom: '100px' }}>
+          {showAllRides ? 'No rides logged yet.' : 'No rides logged today.'}
         </div>
       ) : (
-        todayRides.map(r => (
-          <div key={r.id} style={{ ...globalStyles.card, backgroundColor: theme.card, borderColor: theme.border, padding: '16px', marginBottom: '12px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <span style={{ color: theme.accent, fontWeight: '800' }}>{r.platform}</span>
-                <p style={{ fontSize: '12px', color: theme.subText, margin: '4px 0 0 0' }}>
-                  {r.dist} km • {new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </p>
+        <div style={{ marginBottom: '100px' }}>
+          {displayRides.map((r, i) => {
+            // Show date header when showing all rides and date changes
+            const rDate = new Date(r.timestamp).toDateString();
+            const prevDate = i > 0 ? new Date(displayRides[i - 1].timestamp).toDateString() : null;
+            const showDateHeader = showAllRides && rDate !== prevDate;
+            const isToday = rDate === new Date().toDateString();
+
+            return (
+              <div key={r.id}>
+                {showDateHeader && (
+                  <div style={{
+                    fontSize: '11px', fontWeight: '800', color: theme.subText,
+                    letterSpacing: '0.8px', textTransform: 'uppercase',
+                    padding: '8px 4px 6px',
+                  }}>
+                    {isToday ? '📅 TODAY' : `📅 ${new Date(r.timestamp).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}`}
+                  </div>
+                )}
+                <div style={{ ...globalStyles.card, backgroundColor: theme.card, borderColor: theme.border, padding: '16px', marginBottom: '10px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ color: theme.accent, fontWeight: '800' }}>{r.platform}</span>
+                        {r.isNight && <span style={{ fontSize: '10px', background: '#A78BFA20', color: '#A78BFA', padding: '2px 6px', borderRadius: '4px', fontWeight: '700' }}>🌙</span>}
+                        {r.extraFare > 0 && <span style={{ fontSize: '10px', background: '#00D27A20', color: '#00D27A', padding: '2px 6px', borderRadius: '4px', fontWeight: '700' }}>+tip</span>}
+                      </div>
+                      <p style={{ fontSize: '12px', color: theme.subText, margin: '4px 0 0 0' }}>
+                        {r.dist} km • {new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {r.fare > 0 && <span style={{ marginLeft: '6px', color: theme.subText }}>· ₹{Number(r.fare || 0).toFixed(0)} fare</span>}
+                      </p>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div style={{ textAlign: 'right' }}>
+                      <div style={{ color: '#00D27A', fontWeight: '800', fontSize: '16px' }}>₹{Number(r.net || 0).toFixed(0)}</div>
+                      <div style={{ fontSize: '10px', color: theme.subText }}>net</div>
+                    </div>
+                      <button onClick={() => onDelete(r.id)} style={{ background: 'none', border: 'none', color: '#FF4757', fontWeight: 'bold', cursor: 'pointer', fontSize: '16px' }}>✕</button>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <span style={{ color: theme.text, fontWeight: '800', fontSize: '16px' }}>₹{r.net.toFixed(0)}</span>
-                <button onClick={() => onDelete(r.id)} style={{ background: 'none', border: 'none', color: '#FF4757', fontWeight: 'bold', cursor: 'pointer' }}>✕</button>
-              </div>
-            </div>
-          </div>
-        ))
+            );
+          })}
+        </div>
       )}
       {/* ── FAB: Add Ride ─────────────────────────────────────────── */}
       <style>{`

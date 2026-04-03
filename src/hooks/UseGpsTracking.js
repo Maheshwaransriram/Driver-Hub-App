@@ -1,8 +1,14 @@
 // useGpsTracking.js
-// Lives in App.jsx context — GPS watches survive screen navigation
-// NavigationMap just reads from this hook via props
+// On Android (Capacitor): uses TrackingService (foreground service — survives app close)
+// In browser (dev): uses navigator.geolocation.watchPosition (standard behaviour)
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { registerPlugin } from '@capacitor/core';
+
+// Register our custom native plugin
+const TrackingPlugin = registerPlugin('TrackingPlugin');
+const IS_NATIVE = Capacitor.isNativePlatform();
 
 const TODAY = new Date().toDateString();
 
@@ -11,12 +17,9 @@ const getDistance = (lat1, lon1, lat2, lon2) => {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) *
-    Math.cos(lat2 * Math.PI / 180) *
-    Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const a = Math.sin(dLat/2)**2
+          + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 };
 
 const safeNum = (v) => (typeof v === 'number' && isFinite(v) && v >= 0) ? v : 0;
@@ -39,7 +42,6 @@ const saveShiftState = (shift, riding, ride) => localStorage.setItem('dh_shift_s
 // ─────────────────────────────────────────────────────────────────────────────
 export function useGpsTracking({ isOnline, onDistanceUpdate, onShiftDistanceUpdate, onRideComplete }) {
 
-  // ── Restore persisted state ───────────────────────────────────────────────
   const nav   = loadKey('dh_nav_state')   || {};
   const shift = loadKey('dh_shift_state') || {};
 
@@ -51,24 +53,21 @@ export function useGpsTracking({ isOnline, onDistanceUpdate, onShiftDistanceUpda
   const [lastPosition,   setLastPosition]   = useState(null);
   const [geoError,       setGeoError]       = useState(null);
 
-  // Refs — always current inside async callbacks
-  const shiftWatchRef    = useRef(null);
-  const rideWatchRef     = useRef(null);
-  const shiftPathRef     = useRef([]);
-  const ridePathRef      = useRef([]);
-  const savedDistRef     = useRef(safeNum(nav.savedDistance));
-  const shiftDistRef     = useRef(safeNum(shift.shiftDistance));
-  const rideDistRef      = useRef(safeNum(shift.rideDistance));
-  const isRidingRef      = useRef(shift.isRiding || false);
-  const lastPositionRef  = useRef(null);
+  const shiftWatchRef   = useRef(null);
+  const shiftPathRef    = useRef([]);
+  const ridePathRef     = useRef([]);
+  const savedDistRef    = useRef(safeNum(nav.savedDistance));
+  const shiftDistRef    = useRef(safeNum(shift.shiftDistance));
+  const rideDistRef     = useRef(safeNum(shift.rideDistance));
+  const isRidingRef     = useRef(shift.isRiding || false);
+  const lastPositionRef = useRef(null);
+  const pollIntervalRef = useRef(null); // for native data polling
 
-  // Keep refs in sync with state
   useEffect(() => { savedDistRef.current  = savedDistance; }, [savedDistance]);
   useEffect(() => { shiftDistRef.current  = shiftDistance; }, [shiftDistance]);
   useEffect(() => { rideDistRef.current   = rideDistance;  }, [rideDistance]);
   useEffect(() => { isRidingRef.current   = isRiding;      }, [isRiding]);
 
-  // Persist + notify whenever distances change
   useEffect(() => {
     saveNavState(savedDistance);
     onDistanceUpdate?.(savedDistance + rideDistance);
@@ -79,7 +78,7 @@ export function useGpsTracking({ isOnline, onDistanceUpdate, onShiftDistanceUpda
     onShiftDistanceUpdate?.(shiftDistance);
   }, [shiftDistance, isRiding, rideDistance, onShiftDistanceUpdate]);
 
-  // ── Get initial position immediately on mount so Center Me works right away ─
+  // ── Get initial position on mount ────────────────────────────────────────
   useEffect(() => {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
@@ -91,8 +90,45 @@ export function useGpsTracking({ isOnline, onDistanceUpdate, onShiftDistanceUpda
       () => {},
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 }
     );
-  }, []); // runs once on mount
-  const startShiftWatch = useCallback(() => {
+  }, []);
+
+  // ── NATIVE PATH: poll TrackingService via plugin ──────────────────────────
+  const startNativePolling = useCallback(() => {
+    if (pollIntervalRef.current) return;
+    // Poll native SharedPreferences every 2 seconds to sync into React state
+    pollIntervalRef.current = setInterval(async () => {
+      try {
+        const data = await TrackingPlugin.getTrackingData();
+        const sd = safeNum(data.shiftDistance);
+        const rd = safeNum(data.rideDistance);
+        const lat = data.lastLat;
+        const lng = data.lastLng;
+
+        setShiftDistance(sd);
+        setRideDistance(rd);
+        shiftDistRef.current = sd;
+        rideDistRef.current  = rd;
+
+        if (lat && lng && lat !== 0) {
+          const coord = [lat, lng];
+          lastPositionRef.current = coord;
+          setLastPosition(coord);
+        }
+      } catch (e) {
+        console.warn('TrackingPlugin poll error:', e);
+      }
+    }, 2000);
+  }, []);
+
+  const stopNativePolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }, []);
+
+  // ── BROWSER PATH: standard watchPosition ─────────────────────────────────
+  const startBrowserWatch = useCallback(() => {
     if (!navigator.geolocation || shiftWatchRef.current !== null) return;
     shiftWatchRef.current = navigator.geolocation.watchPosition(
       (pos) => {
@@ -122,7 +158,7 @@ export function useGpsTracking({ isOnline, onDistanceUpdate, onShiftDistanceUpda
           shiftPathRef.current = [newCoord];
         }
 
-        // Ride distance (only when isRiding flag is on)
+        // Ride distance
         if (isRidingRef.current) {
           if (ridePathRef.current.length > 0) {
             const prev = ridePathRef.current[ridePathRef.current.length - 1];
@@ -147,78 +183,99 @@ export function useGpsTracking({ isOnline, onDistanceUpdate, onShiftDistanceUpda
     );
   }, []);
 
-  const stopShiftWatch = useCallback(() => {
+  const stopBrowserWatch = useCallback(() => {
     if (shiftWatchRef.current !== null) {
       navigator.geolocation.clearWatch(shiftWatchRef.current);
       shiftWatchRef.current = null;
     }
     shiftPathRef.current = [];
-    setShiftDistance(0);
-    shiftDistRef.current = 0;
-    localStorage.removeItem('dh_shift_state');
   }, []);
 
-  // Start/stop shift watch based on isOnline
+  // ── Start / stop based on isOnline ────────────────────────────────────────
   useEffect(() => {
     if (isOnline) {
-      startShiftWatch();
+      if (IS_NATIVE) {
+        TrackingPlugin.startShift().catch(console.error);
+        startNativePolling();
+      } else {
+        startBrowserWatch();
+      }
     } else {
-      stopShiftWatch();
+      if (IS_NATIVE) {
+        TrackingPlugin.stopShift().catch(console.error);
+        stopNativePolling();
+      } else {
+        stopBrowserWatch();
+      }
+      // Reset shift data
+      setShiftDistance(0);
+      shiftDistRef.current = 0;
+      localStorage.removeItem('dh_shift_state');
     }
-    return () => {
-      // Don't stop on re-render — only stop when explicitly going offline
-    };
-  }, [isOnline, startShiftWatch, stopShiftWatch]);
+  }, [isOnline, startNativePolling, stopNativePolling, startBrowserWatch, stopBrowserWatch]);
 
-  // Cleanup on app unmount
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (shiftWatchRef.current !== null) navigator.geolocation.clearWatch(shiftWatchRef.current);
-      if (rideWatchRef.current  !== null) navigator.geolocation.clearWatch(rideWatchRef.current);
+      stopNativePolling();
     };
-  }, []);
+  }, [stopNativePolling]);
 
   // ── Ride start / end ──────────────────────────────────────────────────────
   const startRide = useCallback(() => {
-    ridePathRef.current  = [];
-    rideDistRef.current  = 0;
-    isRidingRef.current  = true;
+    ridePathRef.current = [];
+    rideDistRef.current = 0;
+    isRidingRef.current = true;
     setRideDistance(0);
     setIsRiding(true);
     setGeoError(null);
-    // Ensure shift watch is running (covers case where user starts ride before shift)
-    startShiftWatch();
-  }, [startShiftWatch]);
+
+    if (IS_NATIVE) {
+      TrackingPlugin.startRide().catch(console.error);
+    } else {
+      startBrowserWatch(); // ensure watch is running
+    }
+  }, [startBrowserWatch]);
 
   const endRide = useCallback(() => {
     isRidingRef.current = false;
     setIsRiding(false);
 
-    const finalKm = safeNum(rideDistRef.current);
+    if (IS_NATIVE) {
+      TrackingPlugin.stopRide().catch(console.error);
+    }
 
-    // Add ride distance into total saved nav distance
-    setSavedDistance(prev => {
-      const next = safeNum(prev + finalKm);
-      savedDistRef.current = next;
-      saveNavState(next);
-      onDistanceUpdate?.(next);
-      return next;
+    // Read final distance — from native or from ref
+    const getFinalKm = async () => {
+      if (IS_NATIVE) {
+        try {
+          const data = await TrackingPlugin.getTrackingData();
+          return safeNum(data.rideDistance);
+        } catch { return safeNum(rideDistRef.current); }
+      }
+      return safeNum(rideDistRef.current);
+    };
+
+    getFinalKm().then(finalKm => {
+      setSavedDistance(prev => {
+        const next = safeNum(prev + finalKm);
+        savedDistRef.current = next;
+        saveNavState(next);
+        onDistanceUpdate?.(next);
+        return next;
+      });
+      setRideDistance(0);
+      rideDistRef.current = 0;
+      ridePathRef.current = [];
+      setSpeed(0);
+      onRideComplete?.(finalKm);
     });
-
-    setRideDistance(0);
-    rideDistRef.current = 0;
-    ridePathRef.current = [];
-    setSpeed(0);
-
-    // Always open NewRide screen — even if 0km (user can manually enter distance)
-    onRideComplete?.(finalKm);
   }, [onDistanceUpdate, onRideComplete]);
 
-  // Get current path for polyline display
   const getRidePath = useCallback(() => [...ridePathRef.current], []);
 
   return {
-    // State for display
     savedDistance,
     shiftDistance,
     rideDistance,
@@ -228,7 +285,6 @@ export function useGpsTracking({ isOnline, onDistanceUpdate, onShiftDistanceUpda
     lastPositionRef,
     geoError,
     setGeoError,
-    // Actions
     startRide,
     endRide,
     getRidePath,

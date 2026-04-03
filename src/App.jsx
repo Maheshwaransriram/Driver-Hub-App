@@ -27,7 +27,16 @@ export default function App() {
     () => localStorage.getItem("dh_theme") || "dark"
   );
   const [rides, setRides] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("dh_rides") || "[]"); }
+    try {
+      const data = JSON.parse(localStorage.getItem("dh_rides") || "[]");
+
+      return data.filter(r =>
+        r &&
+        typeof r.net === "number" &&
+        typeof r.fare === "number" &&
+        typeof r.dist === "number"
+      );
+    }
     catch { return []; }
   });
   const [fuelLogs, setFuelLogs] = useState(() => {
