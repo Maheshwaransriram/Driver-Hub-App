@@ -1,34 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  COMPLETE AndroidManifest.xml for DriverHub
-  File: android/app/src/main/AndroidManifest.xml
-  Replace your existing manifest with this.
-  Only change YOUR_PACKAGE_NAME to your actual package (e.g. com.driverhub.app)
--->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-  <!-- ── Internet ──────────────────────────────────────────────────────── -->
   <uses-permission android:name="android.permission.INTERNET" />
-
-  <!-- ── Location ──────────────────────────────────────────────────────── -->
   <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-  <!-- Required for Android 10+ to keep tracking when app is in background -->
   <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
-
-  <!-- ── Foreground Service ────────────────────────────────────────────── -->
-  <!-- These allow Android to keep our service running like a pedometer app -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
-
-  <!-- ── Wake Lock ─────────────────────────────────────────────────────── -->
-  <!-- Prevents CPU sleeping while GPS is active -->
   <uses-permission android:name="android.permission.WAKE_LOCK" />
-
-  <!-- ── Notifications (Android 13+) ──────────────────────────────────── -->
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-  <!-- ── Receive Boot (restart service after phone reboot if shift was active) -->
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
   <application
@@ -39,7 +19,6 @@
     android:supportsRtl="true"
     android:theme="@style/AppTheme">
 
-    <!-- ── Main Activity ─────────────────────────────────────────────── -->
     <activity
       android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
       android:name=".MainActivity"
@@ -52,23 +31,12 @@
       </intent-filter>
     </activity>
 
-    <!-- ── Tracking Foreground Service ───────────────────────────────── -->
-    <!--
-      This is the key declaration that enables pedometer-style background tracking.
-      android:foregroundServiceType="location" tells Android this service
-      needs GPS access even when the app is not visible.
-    -->
     <service
       android:name=".TrackingService"
       android:foregroundServiceType="location"
       android:exported="false"
       android:stopWithTask="false" />
-    <!--
-      stopWithTask="false" means the service KEEPS RUNNING even if the user
-      swipes the app away from the recent apps list — same as a pedometer app.
-    -->
 
-    <!-- ── Boot Receiver (optional — restarts tracking after phone reboot) -->
     <receiver
       android:name=".BootReceiver"
       android:exported="true">

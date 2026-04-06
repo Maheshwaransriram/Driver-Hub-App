@@ -21,23 +21,41 @@ const TODAY = new Date().toDateString();
 
 export default function App() {
   const [screen,   setScreen]   = useState("dashboard");
-  const [isOnline, setIsOnline] = useState(false);
+  // Persist isOnline — shift stays ON until driver manually ends it
+  const [isOnline, setIsOnline] = useState(() => {
+    try {
+      // Only restore if it was active today
+      const raw = localStorage.getItem("dh_shift_online");
+      if (!raw) return false;
+      const { online, date } = JSON.parse(raw);
+      return date === new Date().toDateString() ? (online || false) : false;
+    } catch { return false; }
+  });
 
   const [themeMode, setThemeMode] = useState(
     () => localStorage.getItem("dh_theme") || "dark"
   );
   const [rides, setRides] = useState(() => {
     try {
-      const data = JSON.parse(localStorage.getItem("dh_rides") || "[]");
-
-      return data.filter(r =>
-        r &&
-        typeof r.net === "number" &&
-        typeof r.fare === "number" &&
-        typeof r.dist === "number"
+      const raw = localStorage.getItem("dh_rides");
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) { localStorage.removeItem("dh_rides"); return []; }
+      // Strict validation — any corrupt entry could cause a render crash
+      return parsed.filter(r =>
+        r && typeof r === 'object' &&
+        typeof r.id        === 'number' &&
+        typeof r.net       === 'number' && isFinite(r.net) &&
+        typeof r.fare      === 'number' && isFinite(r.fare) &&
+        typeof r.dist      === 'number' && isFinite(r.dist) &&
+        typeof r.timestamp === 'string' &&
+        typeof r.platform  === 'string'
       );
+    } catch (e) {
+      console.error('Corrupted rides, resetting:', e);
+      localStorage.removeItem("dh_rides");
+      return [];
     }
-    catch { return []; }
   });
   const [fuelLogs, setFuelLogs] = useState(() => {
     try { return JSON.parse(localStorage.getItem("dh_fuel") || "[]"); }
@@ -146,15 +164,40 @@ export default function App() {
     currentLiters,
   } = calculateFuelStats();
 
+  // ── Safe localStorage — prevents quota crash from killing the app ────────
+  const safeSetItem = useCallback((key, value) => {
+    try {
+      localStorage.setItem(key, value);
+    } catch (e) {
+      // QuotaExceededError — prune oldest rides to free space
+      if (key === "dh_rides") {
+        try {
+          const current = JSON.parse(localStorage.getItem("dh_rides") || "[]");
+          const pruned  = current.slice(0, 90); // keep latest 90
+          localStorage.setItem("dh_rides", JSON.stringify(pruned));
+          setRides(pruned);
+        } catch {}
+      }
+    }
+  }, []);
+
   // ── Persistence ───────────────────────────────────────────────────────────
-  useEffect(() => { localStorage.setItem("dh_rides",      JSON.stringify(rides));     }, [rides]);
-  useEffect(() => { localStorage.setItem("dh_fuel",       JSON.stringify(fuelLogs));  }, [fuelLogs]);
-  useEffect(() => { localStorage.setItem("dh_settings",   JSON.stringify(settings));  }, [settings]);
-  useEffect(() => { localStorage.setItem("dh_rate_cards", JSON.stringify(rateCards)); }, [rateCards]);
+  useEffect(() => { safeSetItem("dh_rides",      JSON.stringify(rides));     }, [rides, safeSetItem]);
+  useEffect(() => { safeSetItem("dh_fuel",        JSON.stringify(fuelLogs));  }, [fuelLogs, safeSetItem]);
+  useEffect(() => { safeSetItem("dh_settings",    JSON.stringify(settings));  }, [settings, safeSetItem]);
+  useEffect(() => { safeSetItem("dh_rate_cards",  JSON.stringify(rateCards)); }, [rateCards, safeSetItem]);
   useEffect(() => {
     localStorage.setItem("dh_theme", themeMode);
     document.body.style.backgroundColor = themeMode === 'dark' ? '#050B20' : '#E2E8F0';
   }, [themeMode]);
+
+  // Persist shift online state so it survives app close
+  useEffect(() => {
+    localStorage.setItem("dh_shift_online", JSON.stringify({
+      online: isOnline,
+      date: new Date().toDateString(),
+    }));
+  }, [isOnline]);
 
   // ── Fuel alert ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -204,15 +247,15 @@ export default function App() {
     setRides(prev => [{
       ...rideData,
       id:            Date.now(),
-      fare:          finalFare,
-      net:           parseFloat(net.toFixed(2)),
-      commAmt:       parseFloat(commAmt.toFixed(2)),
-      taxAmt:        parseFloat(govtTax.toFixed(2)),
-      platformFee:   parseFloat(platformFee.toFixed(2)),
-      thirdPartyFee: parseFloat(thirdPartyFee.toFixed(2)),
-      extraFare:     extraFareN,
-      extraDeduct:   extraDeductN,
-      fuelCost:      parseFloat(fuelCost.toFixed(2)),
+      fare:          Number(finalFare || 0),
+      net:           Number(net || 0),
+      commAmt:       Number(commAmt || 0),
+      taxAmt:        Number(govtTax || 0),
+      platformFee:   Number(platformFee || 0),
+      thirdPartyFee: Number(thirdPartyFee || 0),
+      extraFare:     Number(extraFareN || 0),
+      extraDeduct:   Number(extraDeductN || 0),
+      fuelCost:      Number(fuelCost || 0),
       isNight,
       timestamp:     new Date().toISOString(),
     }, ...prev]);
@@ -226,6 +269,7 @@ export default function App() {
     if (!val) {
       setShiftDistance(0);
       localStorage.removeItem("dh_shift_state");
+      localStorage.removeItem("dh_shift_online");
     }
   };
 

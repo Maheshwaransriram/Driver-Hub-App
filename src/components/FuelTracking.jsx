@@ -41,8 +41,8 @@ export default function FuelTracking({ theme, fuelLogs, onAddFuelLog, settings, 
     marginBottom: '6px', fontWeight: 'bold',
   };
 
-  const totalSpent  = fuelLogs.reduce((s, l) => s + l.amount, 0);
-  const totalLiters = fuelLogs.reduce((s, l) => s + l.liters, 0);
+  const totalSpent  = fuelLogs.reduce((s, l) => s + Number(l.amount || 0), 0);
+  const totalLiters = fuelLogs.reduce((s, l) => s + Number(l.liters || 0), 0);
 
   return (
     <div style={{ padding: '24px', paddingTop: '70px', paddingBottom: '100px', boxSizing: 'border-box' }}>

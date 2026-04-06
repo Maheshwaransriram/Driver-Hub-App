@@ -4,15 +4,16 @@ import { globalStyles } from '../theme/theme';
 
 export default function Dashboard({ rides, fuelPercentage, remainingRange, fuelValue, currentLiters, settings, theme, onDelete, onAddRide }) {
   
-  const [showAllRides, setShowAllRides] = useState(false);
+  const [showAllRides,  setShowAllRides]  = useState(false);
+  const [expandedRideId, setExpandedRideId] = useState(null);
 
   // --- CALCULATIONS ---
   const todayRides = rides.filter(r => new Date(r.timestamp).toDateString() === new Date().toDateString());
-  const net        = todayRides.reduce((acc, r) => acc + (r.net    || 0), 0);
-  const gross      = todayRides.reduce((acc, r) => acc + (r.fare   || 0), 0);
-  const totalKm    = todayRides.reduce((acc, r) => acc + (r.dist   || 0), 0);
-  const commission = todayRides.reduce((acc, r) => acc + (r.commAmt || 0), 0);
-  const taxes      = todayRides.reduce((acc, r) => acc + (r.taxAmt  || 0), 0);
+  const net        = todayRides.reduce((acc, r) => acc + Number(r.net || 0), 0);
+  const gross      = todayRides.reduce((acc, r) => acc + Number(r.fare || 0), 0);
+  const totalKm    = todayRides.reduce((acc, r) => acc + Number(r.dist || 0), 0);
+  const commission = todayRides.reduce((acc, r) => acc + Number(r.commAmt || 0), 0);
+  const taxes      = todayRides.reduce((acc, r) => acc + Number(r.taxAmt || 0), 0);
 
   // All rides sorted newest first for history view
   const displayRides = showAllRides ? [...rides] : todayRides;
@@ -233,15 +234,15 @@ export default function Dashboard({ rides, fuelPercentage, remainingRange, fuelV
             return (
               <div key={r.id}>
                 {showDateHeader && (
-                  <div style={{
-                    fontSize: '11px', fontWeight: '800', color: theme.subText,
-                    letterSpacing: '0.8px', textTransform: 'uppercase',
-                    padding: '8px 4px 6px',
-                  }}>
+                  <div style={{ fontSize: '11px', fontWeight: '800', color: theme.subText, letterSpacing: '0.8px', textTransform: 'uppercase', padding: '8px 4px 6px' }}>
                     {isToday ? '📅 TODAY' : `📅 ${new Date(r.timestamp).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}`}
                   </div>
                 )}
-                <div style={{ ...globalStyles.card, backgroundColor: theme.card, borderColor: theme.border, padding: '16px', marginBottom: '10px' }}>
+                <div
+                  style={{ ...globalStyles.card, backgroundColor: theme.card, borderColor: expandedRideId === r.id ? theme.accent : theme.border, padding: '16px', marginBottom: '10px', cursor: 'pointer', transition: 'border-color 0.2s' }}
+                  onClick={() => setExpandedRideId(expandedRideId === r.id ? null : r.id)}
+                >
+                  {/* Summary row — always visible */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -251,17 +252,55 @@ export default function Dashboard({ rides, fuelPercentage, remainingRange, fuelV
                       </div>
                       <p style={{ fontSize: '12px', color: theme.subText, margin: '4px 0 0 0' }}>
                         {r.dist} km • {new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        {r.fare > 0 && <span style={{ marginLeft: '6px', color: theme.subText }}>· ₹{Number(r.fare || 0).toFixed(0)} fare</span>}
+                        {r.fare > 0 && <span style={{ marginLeft: '6px' }}>· ₹{Number(r.fare || 0).toFixed(0)} fare</span>}
                       </p>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                       <div style={{ textAlign: 'right' }}>
-                      <div style={{ color: '#00D27A', fontWeight: '800', fontSize: '16px' }}>₹{Number(r.net || 0).toFixed(0)}</div>
-                      <div style={{ fontSize: '10px', color: theme.subText }}>net</div>
-                    </div>
-                      <button onClick={() => onDelete(r.id)} style={{ background: 'none', border: 'none', color: '#FF4757', fontWeight: 'bold', cursor: 'pointer', fontSize: '16px' }}>✕</button>
+                        <div style={{ color: '#00D27A', fontWeight: '900', fontSize: '18px' }}>₹{Number(r.net || 0).toFixed(0)}</div>
+                        <div style={{ fontSize: '10px', color: theme.subText }}>net</div>
+                      </div>
+                      <span style={{ color: theme.subText, fontSize: '11px', transition: 'transform 0.25s', display: 'inline-block', transform: expandedRideId === r.id ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
                     </div>
                   </div>
+
+                  {/* Expandable breakdown — tap to reveal */}
+                  {expandedRideId === r.id && (
+                    <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: `1px solid ${theme.border}` }}>
+                      {[
+                        r.fare > 0            ? ['App Fare',               `₹${Number(r.fare||0).toFixed(2)}`,          theme.text]    : null,
+                        r.extraFare > 0       ? ['Extra Fare (tip)',        `+₹${Number(r.extraFare||0).toFixed(2)}`,    '#00D27A']     : null,
+                        r.commAmt > 0         ? ['Commission',              `-₹${Number(r.commAmt||0).toFixed(2)}`,      '#FF4757']     : null,
+                        r.taxAmt > 0          ? ['Govt. Taxes (GST)',       `-₹${Number(r.taxAmt||0).toFixed(2)}`,       '#FF7B35']     : null,
+                        r.platformFee > 0     ? ['Platform Fee',            `-₹${Number(r.platformFee||0).toFixed(2)}`,  '#FF7B35']     : null,
+                        r.thirdPartyFee > 0   ? ['3rd Party / Insurance',   `-₹${Number(r.thirdPartyFee||0).toFixed(2)}`,'#FF7B35']    : null,
+                        r.extraDeduct > 0     ? ['Extra Deduction',         `-₹${Number(r.extraDeduct||0).toFixed(2)}`,  '#FF4757']     : null,
+                        r.fuelCost > 0        ? ['Fuel Cost',               `-₹${Number(r.fuelCost||0).toFixed(2)}`,     '#FFD166']     : null,
+                      ].filter(Boolean).map(([label, val, color]) => (
+                        <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '7px' }}>
+                          <span style={{ fontSize: '12px', color: theme.subText }}>{label}</span>
+                          <span style={{ fontSize: '12px', fontWeight: '700', color, fontFamily: 'monospace' }}>{val}</span>
+                        </div>
+                      ))}
+                      <div style={{ height: '1px', background: theme.border, margin: '10px 0' }} />
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '14px', fontWeight: '800', color: theme.text }}>You earned</span>
+                        <span style={{ fontSize: '22px', fontWeight: '900', color: '#00D27A', fontFamily: 'monospace' }}>₹{Number(r.net||0).toFixed(2)}</span>
+                      </div>
+                      {r.dist > 0 && r.net > 0 && (
+                        <p style={{ fontSize: '11px', color: theme.subText, margin: '4px 0 10px', textAlign: 'right', fontWeight: '600' }}>
+                          ₹{(r.net / r.dist).toFixed(2)} per km
+                        </p>
+                      )}
+                      {r.notes ? <p style={{ fontSize: '11px', color: theme.subText, fontStyle: 'italic', marginBottom: '10px' }}>📝 {r.notes}</p> : null}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onDelete(r.id); }}
+                        style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid #FF4757', background: '#FF475710', color: '#FF4757', fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}
+                      >
+                        🗑️ Delete Ride
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             );
