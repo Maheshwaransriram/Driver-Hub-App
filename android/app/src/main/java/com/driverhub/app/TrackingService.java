@@ -133,7 +133,7 @@ public class TrackingService extends Service {
                         float shiftDist = prefs.getFloat(KEY_SHIFT_DIST, 0f) + inc;
                         prefs.edit().putFloat(KEY_SHIFT_DIST, shiftDist).apply();
 
-                        if (prefs.getBoolean(KEY_IS_RIDING, false) && inc > 0.020f && speed > 2f) {
+                        if (prefs.getBoolean(KEY_IS_RIDING, false) && inc > 0.010f && location.getAccuracy() <= 50f) {
                             float rideDist = prefs.getFloat(KEY_RIDE_DIST, 0f) + inc;
                             prefs.edit().putFloat(KEY_RIDE_DIST, rideDist).apply();
                         }
@@ -172,7 +172,7 @@ public class TrackingService extends Service {
         String contentText = isRiding ? String.format("🏍️ Ride: %.2f km  |  Shift: %.2f km", rideKm, shiftKm) : String.format("📍 Shift total: %.2f km", shiftKm);
 
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(isRiding ? "🚀 Ride in Progress" : "✅ Shift Active — DriverHub")
+            .setContentTitle(isRiding ? "🚀 Ride in Progress" : "✅ Shift Active — DriveX Hub")
             .setContentText(contentText)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
