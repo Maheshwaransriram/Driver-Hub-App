@@ -6,11 +6,15 @@ import android.os.Build;
 import android.os.Bundle;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.splashscreen.SplashScreen;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Handle the splash screen transition.
+        SplashScreen.installSplashScreen(this);
+
         registerPlugin(TrackingPlugin.class);
         super.onCreate(savedInstanceState);
 

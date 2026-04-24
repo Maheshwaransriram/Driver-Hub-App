@@ -1,301 +1,516 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import StatCard from './StatCard';
+import { 
+  ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip
+} from 'recharts';
 import { globalStyles } from '../theme/theme';
 
-export default function Dashboard({ rides, fuelPercentage, remainingRange, fuelValue, currentLiters, settings, theme, onDelete, onAddRide }) {
-  
-  const [showAllRides,  setShowAllRides]  = useState(false);
+export default function Dashboard({ 
+  rides = [], 
+  fuelPercentage, 
+  remainingRange, 
+  fuelValue, 
+  currentLiters, 
+  settings, 
+  theme, 
+  onDelete, 
+  onAddRide 
+}) {
+  // NOTE: rides come from App.jsx (already persisted there via dh_rides).
+  // Dashboard is a pure display component — it does NOT maintain its own
+  // rides state or localStorage. Doing so caused a split-brain bug where
+  // App and Dashboard held different ride lists after the first render.
+  const [showAllRides, setShowAllRides] = useState(false);
   const [expandedRideId, setExpandedRideId] = useState(null);
-
-  // --- CALCULATIONS ---
-  const todayRides = rides.filter(r => new Date(r.timestamp).toDateString() === new Date().toDateString());
-  const net        = todayRides.reduce((acc, r) => acc + Number(r.net || 0), 0);
-  const gross      = todayRides.reduce((acc, r) => acc + Number(r.fare || 0), 0);
-  const totalKm    = todayRides.reduce((acc, r) => acc + Number(r.dist || 0), 0);
-  const commission = todayRides.reduce((acc, r) => acc + Number(r.commAmt || 0), 0);
-  const taxes      = todayRides.reduce((acc, r) => acc + Number(r.taxAmt || 0), 0);
-
-  // All rides sorted newest first for history view
-  const displayRides = showAllRides ? [...rides] : todayRides;
-
-  // --- GOAL TRACKING ---
-  const dailyGoal      = settings.dailyGoal || 1000;
-  const rideGoal       = settings.rideGoal  || 15;
-  const goalPct        = Math.min(100, (net / dailyGoal) * 100);
-  const ridePct        = Math.min(100, (todayRides.length / rideGoal) * 100);
-  const goalReached    = net >= dailyGoal;
-  const remaining      = Math.max(0, dailyGoal - net);
-
-  // Pick a label based on how close you are
-  const goalStatus = goalReached
-    ? '🎉 Goal Reached!'
-    : goalPct >= 75 ? '🔥 Almost there!'
-    : goalPct >= 50 ? '💪 Halfway there'
-    : goalPct >= 25 ? '🚀 Keep going!'
-    : '🏁 Just started';
-
-  const isLow = remainingRange <= 15;
   const [fabPressed, setFabPressed] = useState(false);
 
-  const handleFabClick = () => {
+  // Memoized calculations - prevents recalc on every render
+  const todayRides = useMemo(() => {
+    const today = new Date().toDateString();
+    return rides.filter(r => {
+      try {
+        return new Date(r.timestamp).toDateString() === today;
+      } catch {
+        return false;
+      }
+    });
+  }, [rides]);
+
+  const stats = useMemo(() => {
+    const safeNum = (n) => isFinite(n) ? Number(n) : 0;
+    return {
+      net: todayRides.reduce((acc, r) => acc + safeNum(r.net), 0),
+      gross: todayRides.reduce((acc, r) => acc + safeNum(r.fare), 0),
+      totalKm: todayRides.reduce((acc, r) => acc + safeNum(r.dist), 0),
+      commission: todayRides.reduce((acc, r) => acc + safeNum(r.commAmt), 0),
+      taxes: todayRides.reduce((acc, r) => acc + safeNum(r.taxAmt), 0),
+    };
+  }, [todayRides]);
+
+  const displayRides = useMemo(() => 
+    showAllRides ? [...rides].sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp)) : todayRides,
+    [showAllRides, rides, todayRides]
+  );
+
+  // Goal tracking
+  const dailyGoal = settings?.dailyGoal || 1000;
+  const rideGoal = settings?.rideGoal || 15;
+  const goalPct = Math.min(100, (stats.net / dailyGoal) * 100);
+  const ridePct = Math.min(100, (todayRides.length / rideGoal) * 100);
+  const goalReached = stats.net >= dailyGoal;
+  const remaining = Math.max(0, dailyGoal - stats.net);
+
+  const goalStatus = goalReached ? '🎉 Goal Reached!' :
+    goalPct >= 75 ? '🔥 Almost there!' :
+    goalPct >= 50 ? '💪 Halfway there' :
+    goalPct >= 25 ? '🚀 Keep going!' : '🏁 Just started';
+
+  // Charts data (last 7 days) — uses all rides, NOT displayRides
+  // so the chart doesn't change when user toggles Today/History
+  const chartData = useMemo(() => {
+    const days = {};
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    
+    rides.forEach(r => {
+      try {
+        const date = new Date(r.timestamp);
+        if (date >= oneWeekAgo) {
+          const day = date.toLocaleDateString('en-IN', { weekday: 'short' });
+          days[day] = (days[day] || 0) + (isFinite(r.net) ? Number(r.net) : 0);
+        }
+      } catch { /* skip corrupt timestamp */ }
+    });
+
+    return Object.entries(days)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([day, net]) => ({ day, net: parseFloat(net.toFixed(2)) }));
+  }, [rides]); // FIX: was [displayRides] — recalculated every time toggle changed
+
+  // Event handlers with useCallback
+  const handleFabClick = useCallback(() => {
     setFabPressed(true);
-    setTimeout(() => { setFabPressed(false); onAddRide?.(); }, 200);
+    setTimeout(() => {
+      setFabPressed(false);
+      onAddRide?.();
+    }, 200);
+  }, [onAddRide]);
+
+  const handleDelete = useCallback((id) => {
+    // window.confirm works in browser dev; on Android WebView it returns true
+    // without showing (silently). We guard with a try/catch and always delegate
+    // the actual state update to App via onDelete — Dashboard never mutates rides.
+    try {
+      if (!window.confirm('Delete this ride? This cannot be undone.')) return;
+    } catch {
+      // WebView blocked confirm — proceed without confirmation
+    }
+    onDelete?.(id);
+    setExpandedRideId(null); // close expanded card after delete
+  }, [onDelete]);
+
+  const toggleRide = useCallback((id) => {
+    setExpandedRideId(expandedRideId === id ? null : id);
+  }, [expandedRideId]);
+
+  const isLowFuel = remainingRange <= 15;
+
+  // Styles (extracted for reuse)
+  const cardStyle = {
+    backgroundColor: theme.card,
+    border: `1px solid ${theme.border}`,
+    borderRadius: '16px',
+    padding: '20px',
+    marginBottom: '20px',
   };
 
   return (
-    <div style={{ padding: '24px', paddingTop: '70px', boxSizing: 'border-box' }}>
-      <h2 style={{ margin: '0 0 24px 0', color: theme.text, fontSize: '26px' }}>Dashboard</h2>
+    <div style={{ padding: '24px', paddingTop: '70px', paddingBottom: '100px', boxSizing: 'border-box', maxWidth: '800px', margin: '0 auto' }}>
       
-      {/* ── 2. FUEL MONITOR CARD ───────────────────────────────────────────── */}
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
+        <div style={{
+          width: '44px', height: '44px', borderRadius: '12px', 
+          background: 'linear-gradient(135deg, #7FE832, #00D27A)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 4px 20px rgba(127, 232, 50, 0.4)'
+        }}>
+          🚀
+        </div>
+        <div>
+          <h1 style={{ 
+            margin: 0, color: theme.text, fontSize: '28px', fontWeight: '900', 
+            lineHeight: 1.1, letterSpacing: '-0.02em'
+          }}>
+            Drive<span style={{ color: '#7FE832' }}>X</span> Hub
+          </h1>
+          <p style={{ margin: '4px 0 0', fontSize: '13px', color: theme.subText, fontWeight: '600' }}>
+            {new Date().toLocaleDateString('en-IN', { 
+              weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' 
+            })}
+          </p>
+        </div>
+      </div>
+
+      {/* Fuel Monitor */}
       <div style={{ 
-        ...globalStyles.card, 
-        backgroundColor: theme.card, 
-        borderColor: isLow ? '#FF4757' : theme.border,
-        borderWidth: isLow ? '2px' : '1px',
-        marginBottom: '20px'
+        ...cardStyle, 
+        borderColor: isLowFuel ? '#FF4757' : theme.accent,
+        borderWidth: isLowFuel ? '2px' : '1px'
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '18px' }}>⛽</span>
-            <span style={{ fontWeight: '800', fontSize: '14px', color: theme.text }}>Fuel Remaining</span>
+            <span style={{ fontSize: '20px' }}>⛽</span>
+            <span style={{ fontWeight: '800', fontSize: '15px', color: theme.text }}>Fuel Status</span>
           </div>
           <div style={{ textAlign: 'right' }}>
-            <span style={{ fontWeight: '900', color: isLow ? '#FF4757' : '#00D27A', fontSize: '16px', display: 'block' }}>
-              {remainingRange.toFixed(1)} KM
-            </span>
-            <span style={{ fontSize: '11px', color: theme.subText, fontWeight: '700' }}>
-              {currentLiters.toFixed(2)} Liters
-            </span>
+            <div style={{ 
+              fontWeight: '900', fontSize: '20px', 
+              color: isLowFuel ? '#FF4757' : '#00D27A' 
+            }}>
+              {remainingRange.toFixed(1)} km
+            </div>
+            <div style={{ fontSize: '12px', color: theme.subText }}>
+              {currentLiters.toFixed(2)} L • ₹{fuelValue.toFixed(0)}
+            </div>
           </div>
         </div>
-
-        <div style={{ width: '100%', height: '14px', background: theme.bg, borderRadius: '7px', overflow: 'hidden', marginBottom: '12px' }}>
+        <div style={{ 
+          width: '100%', height: '12px', background: theme.bg, 
+          borderRadius: '6px', overflow: 'hidden' 
+        }}>
           <div style={{ 
-            width: `${fuelPercentage}%`, 
-            height: '100%', 
-            background: isLow
-              ? 'linear-gradient(90deg, #FF4757, #FF6B6B)'
+            width: `${fuelPercentage}%`, height: '100%',
+            background: isLowFuel 
+              ? 'linear-gradient(90deg, #FF4757, #FF6B6B)' 
               : 'linear-gradient(90deg, #00D27A, #059669)',
-            borderRadius: '7px',
-            transition: 'width 0.8s cubic-bezier(0.4, 0, 0.2, 1)'
+            borderRadius: '6px', transition: 'width 0.6s ease'
           }} />
         </div>
+        {isLowFuel && (
+          <div style={{ 
+            textAlign: 'center', marginTop: '12px', 
+            padding: '8px', background: 'rgba(255,71,87,0.1)', 
+            borderRadius: '8px', fontSize: '12px', fontWeight: '700', color: '#FF4757'
+          }}>
+            ⚠️ Low fuel - time to refill!
+          </div>
+        )}
+      </div>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <p style={{ margin: 0, fontSize: '11px', color: theme.subText, fontWeight: 'bold' }}>
-            VALUE: <span style={{ color: theme.text }}>₹{fuelValue.toFixed(0)}</span>
-          </p>
-          {isLow && <span style={{ fontSize: '10px', color: '#FF4757', fontWeight: '900' }}>⚠️ REFILL</span>}
+      {/* Profit & Rides Highlight */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: '16px', marginBottom: '24px' }}>
+        <div style={{ 
+          background: 'linear-gradient(135deg, #00D27A, #059669)', 
+          padding: '28px', borderRadius: '20px', color: 'white',
+          boxShadow: '0 10px 30px rgba(0,210,122,0.3)'
+        }}>
+          <p style={{ fontSize: '13px', fontWeight: '800', margin: 0, opacity: 0.9 }}>TODAY'S NET PROFIT</p>
+          <div style={{ fontSize: '48px', fontWeight: '900', margin: '12px 0 0 0' }}>
+            ₹{stats.net.toFixed(0)}
+          </div>
+        </div>
+        <div style={{ 
+          ...cardStyle, textAlign: 'center', padding: '28px 20px',
+          borderColor: theme.accent
+        }}>
+          <p style={{ fontSize: '13px', color: theme.subText, fontWeight: '800', margin: 0 }}>COMPLETED</p>
+          <div style={{ fontSize: '48px', fontWeight: '900', color: theme.text, margin: '8px 0 0 0' }}>
+            {todayRides.length}
+          </div>
         </div>
       </div>
 
-      {/* ── 3. PROFIT HIGHLIGHT ────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: '16px', marginBottom: '20px' }}>
-        <div style={{ flex: 1.5, background: theme.profitBg, padding: '24px', borderRadius: '24px', color: theme.profitText }}>
-          <p style={{ fontSize: '12px', fontWeight: '800', margin: 0 }}>NET PROFIT</p>
-          <h1 style={{ fontSize: '42px', margin: '8px 0' }}>₹{net.toFixed(0)}</h1>
-        </div>
-        <div style={{ flex: 1, backgroundColor: theme.card, padding: '24px', borderRadius: '24px', border: `1px solid ${theme.border}`, textAlign: 'center' }}>
-          <p style={{ fontSize: '12px', color: theme.subText, fontWeight: '800', margin: 0 }}>RIDES</p>
-          <h1 style={{ fontSize: '42px', margin: '8px 0', color: theme.text }}>{todayRides.length}</h1>
-        </div>
-      </div>
-
-      {/* ── 4. STATS GRID ──────────────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
-        <StatCard theme={theme} title="Gross Pay"       value={`₹${gross.toFixed(0)}`}        icon="💵" />
-        <StatCard theme={theme} title="Distance"        value={`${totalKm.toFixed(1)} km`}     icon="🛣️" />
-        <StatCard theme={theme} title="Commission Fees" value={`₹${commission.toFixed(0)}`}    icon="🏢" />
-        <StatCard theme={theme} title="Taxes (5%)"      value={`₹${taxes.toFixed(0)}`}         icon="🏛️" />
-      </div>
-
-      {/* ── 1. GOAL TRACKING CARD ──────────────────────────────────────────── */}
-      <div style={{
-        ...globalStyles.card,
-        backgroundColor: theme.card,
+      {/* Goal Tracker */}
+      <div style={{ 
+        ...cardStyle, 
         borderColor: goalReached ? '#00D27A' : theme.border,
-        borderWidth: goalReached ? '2px' : '1px',
-        marginBottom: '20px',
+        marginBottom: '24px'
       }}>
-        {/* Header row */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '18px' }}>🎯</span>
-              <span style={{ fontWeight: '800', fontSize: '14px', color: theme.text }}>Daily Goal</span>
+              <span style={{ fontSize: '20px' }}>🎯</span>
+              <span style={{ fontWeight: '800', fontSize: '15px', color: theme.text }}>Daily Target</span>
             </div>
-            <p style={{ margin: '4px 0 0', fontSize: '12px', color: theme.subText, fontWeight: '600' }}>
+            <p style={{ margin: '4px 0 0', fontSize: '13px', color: goalReached ? '#00D27A' : theme.subText }}>
               {goalStatus}
             </p>
           </div>
           <div style={{ textAlign: 'right' }}>
-            <span style={{
-              fontWeight: '900', fontSize: '16px', display: 'block',
-              color: goalReached ? '#00D27A' : theme.text,
-            }}>
-              ₹{net.toFixed(0)}
-              <span style={{ fontSize: '12px', color: theme.subText, fontWeight: '600' }}>
-                {' '}/ ₹{dailyGoal}
-              </span>
-            </span>
+            <div style={{ fontSize: '18px', fontWeight: '900', color: goalReached ? '#00D27A' : theme.text }}>
+              ₹{stats.net.toFixed(0)} / ₹{dailyGoal}
+            </div>
             {!goalReached && (
-              <span style={{ fontSize: '11px', color: theme.subText, fontWeight: '700' }}>
-                ₹{remaining.toFixed(0)} to go
-              </span>
+              <div style={{ fontSize: '12px', color: theme.subText }}>
+                ₹{remaining.toFixed(0)} remaining
+              </div>
             )}
           </div>
         </div>
-
-        {/* Earnings progress bar */}
-        <div style={{ marginBottom: '14px' }}>
-          <div style={{ width: '100%', height: '14px', background: theme.bg, borderRadius: '7px', overflow: 'hidden' }}>
+        
+        {/* Earnings Progress */}
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ height: '12px', background: theme.bg, borderRadius: '6px', overflow: 'hidden' }}>
             <div style={{
-              width: `${goalPct}%`,
-              height: '100%',
-              background: goalReached
-                ? 'linear-gradient(90deg, #00D27A, #059669)'
-                : goalPct >= 75
-                  ? 'linear-gradient(90deg, #FFD166, #F4A261)'
-                  : 'linear-gradient(90deg, #4E9CFF, #6366f1)',
-              borderRadius: '7px',
-              transition: 'width 0.8s cubic-bezier(0.4, 0, 0.2, 1)',
+              width: `${goalPct}%`, height: '100%',
+              background: goalReached 
+                ? 'linear-gradient(90deg, #00D27A, #059669)' 
+                : goalPct >= 75 
+                  ? 'linear-gradient(90deg, #FCD34D, #F59E0B)' 
+                  : 'linear-gradient(90deg, #3B82F6, #6366F1)',
+              borderRadius: '6px', transition: 'width 0.6s ease'
             }} />
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '5px' }}>
-            <span style={{ fontSize: '10px', color: theme.subText, fontWeight: '700' }}>₹0</span>
-            <span style={{ fontSize: '10px', color: theme.subText, fontWeight: '700' }}>
-              {goalPct.toFixed(0)}%
-            </span>
-            <span style={{ fontSize: '10px', color: theme.subText, fontWeight: '700' }}>₹{dailyGoal}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginTop: '6px' }}>
+            <span style={{ color: theme.subText }}>₹0</span>
+            <span style={{ color: theme.text, fontWeight: '700' }}>{goalPct.toFixed(0)}%</span>
+            <span style={{ color: theme.subText }}>₹{dailyGoal}</span>
           </div>
         </div>
 
-        {/* Ride count progress bar */}
-        <div style={{
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          marginBottom: '8px',
-        }}>
-          <span style={{ fontSize: '12px', color: theme.subText, fontWeight: '700' }}>
-            🏍️ Rides
-          </span>
-          <span style={{ fontSize: '12px', color: theme.text, fontWeight: '800' }}>
-            {todayRides.length}
-            <span style={{ color: theme.subText, fontWeight: '600' }}> / {rideGoal}</span>
+        {/* Rides Progress */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+          <span style={{ fontSize: '13px', color: theme.subText }}>🏍️ Rides</span>
+          <span style={{ fontSize: '13px', fontWeight: '800', color: theme.text }}>
+            {todayRides.length} / {rideGoal}
           </span>
         </div>
-        <div style={{ width: '100%', height: '8px', background: theme.bg, borderRadius: '4px', overflow: 'hidden' }}>
+        <div style={{ height: '8px', background: theme.bg, borderRadius: '4px', overflow: 'hidden' }}>
           <div style={{
-            width: `${ridePct}%`,
-            height: '100%',
-            background: ridePct >= 100
-              ? 'linear-gradient(90deg, #00D27A, #059669)'
-              : 'linear-gradient(90deg, #A78BFA, #7C3AED)',
-            borderRadius: '4px',
-            transition: 'width 0.8s cubic-bezier(0.4, 0, 0.2, 1)',
+            width: `${ridePct}%`, height: '100%',
+            background: ridePct >= 100 ? '#00D27A' : '#A78BFA',
+            borderRadius: '4px', transition: 'width 0.6s ease'
           }} />
         </div>
       </div>
 
-      {/* ── 5. TODAY'S RIDES / HISTORY ─────────────────────────────────────── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-        <h3 style={{ fontSize: '18px', color: theme.text, fontWeight: '800', margin: 0 }}>
-          {showAllRides ? 'Ride History' : "Today's Rides"}
-        </h3>
-        <div style={{ display: 'flex', gap: '0px', borderRadius: '10px', overflow: 'hidden', border: `1px solid ${theme.border}` }}>
-          {[['Today', false], ['All', true]].map(([label, val]) => (
-            <button
-              key={label}
-              onClick={() => setShowAllRides(val)}
-              style={{
-                padding: '6px 14px', border: 'none', cursor: 'pointer',
-                fontSize: '12px', fontWeight: '700',
-                background: showAllRides === val ? theme.accent : theme.card,
-                color: showAllRides === val ? '#fff' : theme.subText,
-                transition: 'all 0.2s',
-              }}
-            >{label}</button>
-          ))}
-        </div>
+      {/* Stats Grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+        <StatCard theme={theme} title="Gross Earnings" value={`₹${stats.gross.toFixed(0)}`} icon="💵" />
+        <StatCard theme={theme} title="Total Distance" value={`${stats.totalKm.toFixed(1)} km`} icon="🛣️" />
+        <StatCard theme={theme} title="Commission" value={`₹${stats.commission.toFixed(0)}`} icon="🏢" />
+        <StatCard theme={theme} title="Taxes" value={`₹${stats.taxes.toFixed(0)}`} icon="🏛️" />
       </div>
 
-      {displayRides.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '30px', color: theme.subText, backgroundColor: theme.card, borderRadius: '20px', marginBottom: '100px' }}>
-          {showAllRides ? 'No rides logged yet.' : 'No rides logged today.'}
+      {/* Weekly Earnings Chart */}
+      {chartData.length > 0 && (
+        <div style={{ ...cardStyle, marginBottom: '24px' }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', color: theme.text, fontWeight: '700' }}>
+            📈 Weekly Earnings Trend
+          </h3>
+          <ResponsiveContainer width="100%" height={250}>
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3" stroke={theme.border} vertical={false} />
+              <XAxis dataKey="day" stroke={theme.text} fontSize={12} />
+              <YAxis stroke={theme.text} fontSize={12} />
+              <Tooltip
+                formatter={(value) => [`₹${Number(value).toFixed(0)}`, 'Net Earnings']}
+                contentStyle={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px' }}
+                labelStyle={{ color: theme.text, fontWeight: '700' }}
+              />
+              <Line type="monotone" dataKey="net" stroke="#00D27A" strokeWidth={3} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
-      ) : (
-        <div style={{ marginBottom: '100px' }}>
-          {displayRides.map((r, i) => {
-            // Show date header when showing all rides and date changes
-            const rDate = new Date(r.timestamp).toDateString();
-            const prevDate = i > 0 ? new Date(displayRides[i - 1].timestamp).toDateString() : null;
-            const showDateHeader = showAllRides && rDate !== prevDate;
-            const isToday = rDate === new Date().toDateString();
+      )}
+
+      {/* Rides List */}
+      <div style={{ marginBottom: '120px' }}>
+        <div style={{ 
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
+          marginBottom: '20px' 
+        }}>
+          <h2 style={{ fontSize: '20px', color: theme.text, fontWeight: '800', margin: 0 }}>
+            {showAllRides ? '📋 Ride History' : '🏍️ Today’s Rides'}
+          </h2>
+          <div style={{ display: 'flex', gap: '1px', borderRadius: '10px', overflow: 'hidden' }}>
+            {[['Today', false], ['History', true]].map(([label, all]) => (
+              <button
+                key={label}
+                onClick={() => setShowAllRides(all)}
+                style={{
+                  padding: '8px 16px', border: 'none', cursor: 'pointer',
+                  fontSize: '13px', fontWeight: '700',
+                  background: showAllRides === all ? theme.accent : theme.bg,
+                  color: showAllRides === all ? 'white' : theme.text,
+                  transition: 'all 0.2s ease',
+                }}
+                aria-pressed={showAllRides === all}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {displayRides.length === 0 ? (
+          <div style={{ 
+            textAlign: 'center', padding: '40px 20px', 
+            color: theme.subText, backgroundColor: theme.card, 
+            borderRadius: '20px', border: `1px solid ${theme.border}`
+          }}>
+            {showAllRides ? 'No rides logged yet. Get started!' : "Great day to make some money! 🚀"}
+          </div>
+        ) : (
+          displayRides.map((ride, index) => {
+            const rideDate = new Date(ride.timestamp).toDateString();
+            const prevDate = index > 0 ? new Date(displayRides[index - 1].timestamp).toDateString() : null;
+            const showDateHeader = showAllRides && rideDate !== prevDate;
+            const isToday = rideDate === new Date().toDateString();
 
             return (
-              <div key={r.id}>
+              <div key={ride.id}>
                 {showDateHeader && (
-                  <div style={{ fontSize: '11px', fontWeight: '800', color: theme.subText, letterSpacing: '0.8px', textTransform: 'uppercase', padding: '8px 4px 6px' }}>
-                    {isToday ? '📅 TODAY' : `📅 ${new Date(r.timestamp).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}`}
+                  <div style={{ 
+                    fontSize: '12px', fontWeight: '800', color: theme.subText, 
+                    letterSpacing: '1px', textTransform: 'uppercase', 
+                    padding: '12px 8px 8px', borderBottom: `1px solid ${theme.border}`
+                  }}>
+                    {isToday ? '📅 TODAY' : `📅 ${new Date(ride.timestamp).toLocaleDateString('en-IN', { 
+                      weekday: 'short', day: 'numeric', month: 'short' 
+                    })}`}
                   </div>
                 )}
                 <div
-                  style={{ ...globalStyles.card, backgroundColor: theme.card, borderColor: expandedRideId === r.id ? theme.accent : theme.border, padding: '16px', marginBottom: '10px', cursor: 'pointer', transition: 'border-color 0.2s' }}
-                  onClick={() => setExpandedRideId(expandedRideId === r.id ? null : r.id)}
+                  role="button"
+                  tabIndex={0}
+                  style={{ 
+                    ...cardStyle, 
+                    borderColor: expandedRideId === ride.id ? theme.accent : theme.border,
+                    cursor: 'pointer',
+                    padding: '20px',
+                    marginBottom: '12px'
+                  }}
+                  onClick={() => toggleRide(ride.id)}
+                  onKeyDown={(e) => e.key === 'Enter' && toggleRide(ride.id)}
+                  aria-expanded={expandedRideId === ride.id}
+                  aria-label={`Toggle details for ${ride.platform} ride`}
                 >
-                  {/* Summary row — always visible */}
+                  {/* Ride Summary */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ color: theme.accent, fontWeight: '800' }}>{r.platform}</span>
-                        {r.isNight && <span style={{ fontSize: '10px', background: '#A78BFA20', color: '#A78BFA', padding: '2px 6px', borderRadius: '4px', fontWeight: '700' }}>🌙</span>}
-                        {r.extraFare > 0 && <span style={{ fontSize: '10px', background: '#00D27A20', color: '#00D27A', padding: '2px 6px', borderRadius: '4px', fontWeight: '700' }}>+tip</span>}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                        <span style={{ color: theme.accent, fontWeight: '800', fontSize: '15px' }}>
+                          {ride.platform}
+                        </span>
+                        {ride.isNight && (
+                          <span style={{ 
+                            fontSize: '11px', background: 'rgba(167,139,250,0.2)', 
+                            color: '#A78BFA', padding: '3px 8px', borderRadius: '6px', 
+                            fontWeight: '700' 
+                          }}>🌙 Night</span>
+                        )}
+                        {ride.extraFare > 0 && (
+                          <span style={{ 
+                            fontSize: '11px', background: 'rgba(0,210,122,0.2)', 
+                            color: '#00D27A', padding: '3px 8px', borderRadius: '6px', 
+                            fontWeight: '700' 
+                          }}>+Tip</span>
+                        )}
                       </div>
-                      <p style={{ fontSize: '12px', color: theme.subText, margin: '4px 0 0 0' }}>
-                        {r.dist} km • {new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        {r.fare > 0 && <span style={{ marginLeft: '6px' }}>· ₹{Number(r.fare || 0).toFixed(0)} fare</span>}
+                      <p style={{ fontSize: '13px', color: theme.subText, margin: 0 }}>
+                        {ride.dist?.toFixed(1)} km •{' '}
+                        {new Date(ride.timestamp).toLocaleTimeString([], { 
+                          hour: '2-digit', minute: '2-digit' 
+                        })}
+                        {ride.fare > 0 && ` • ₹${Number(ride.fare || 0).toFixed(0)} fare`}
                       </p>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       <div style={{ textAlign: 'right' }}>
-                        <div style={{ color: '#00D27A', fontWeight: '900', fontSize: '18px' }}>₹{Number(r.net || 0).toFixed(0)}</div>
-                        <div style={{ fontSize: '10px', color: theme.subText }}>net</div>
+                        <div style={{ 
+                          color: '#00D27A', fontWeight: '900', fontSize: '22px' 
+                        }}>
+                          ₹{Number(ride.net || 0).toFixed(0)}
+                        </div>
+                        <div style={{ fontSize: '11px', color: theme.subText }}>net</div>
                       </div>
-                      <span style={{ color: theme.subText, fontSize: '11px', transition: 'transform 0.25s', display: 'inline-block', transform: expandedRideId === r.id ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
+                      <span 
+                        style={{ 
+                          color: theme.subText, fontSize: '14px', 
+                          transition: 'transform 0.3s ease',
+                          display: 'inline-block',
+                          transform: expandedRideId === ride.id ? 'rotate(180deg)' : 'rotate(0deg)'
+                        }} 
+                        aria-hidden="true"
+                      >
+                        ▼
+                      </span>
                     </div>
                   </div>
 
-                  {/* Expandable breakdown — tap to reveal */}
-                  {expandedRideId === r.id && (
-                    <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: `1px solid ${theme.border}` }}>
+                  {/* Expanded Details */}
+                  {expandedRideId === ride.id && (
+                    <div style={{ 
+                      marginTop: '20px', paddingTop: '20px', 
+                      borderTop: `1px solid ${theme.border}` 
+                    }}>
                       {[
-                        r.fare > 0            ? ['App Fare',               `₹${Number(r.fare||0).toFixed(2)}`,          theme.text]    : null,
-                        r.extraFare > 0       ? ['Extra Fare (tip)',        `+₹${Number(r.extraFare||0).toFixed(2)}`,    '#00D27A']     : null,
-                        r.commAmt > 0         ? ['Commission',              `-₹${Number(r.commAmt||0).toFixed(2)}`,      '#FF4757']     : null,
-                        r.taxAmt > 0          ? ['Govt. Taxes (GST)',       `-₹${Number(r.taxAmt||0).toFixed(2)}`,       '#FF7B35']     : null,
-                        r.platformFee > 0     ? ['Platform Fee',            `-₹${Number(r.platformFee||0).toFixed(2)}`,  '#FF7B35']     : null,
-                        r.thirdPartyFee > 0   ? ['3rd Party / Insurance',   `-₹${Number(r.thirdPartyFee||0).toFixed(2)}`,'#FF7B35']    : null,
-                        r.extraDeduct > 0     ? ['Extra Deduction',         `-₹${Number(r.extraDeduct||0).toFixed(2)}`,  '#FF4757']     : null,
-                        r.fuelCost > 0        ? ['Fuel Cost',               `-₹${Number(r.fuelCost||0).toFixed(2)}`,     '#FFD166']     : null,
-                      ].filter(Boolean).map(([label, val, color]) => (
-                        <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '7px' }}>
-                          <span style={{ fontSize: '12px', color: theme.subText }}>{label}</span>
-                          <span style={{ fontSize: '12px', fontWeight: '700', color, fontFamily: 'monospace' }}>{val}</span>
+                        ride.fare > 0 && ['App Fare', `₹${Number(ride.fare||0).toFixed(2)}`, theme.text],
+                        ride.extraFare > 0 && ['Tip', `+₹${Number(ride.extraFare||0).toFixed(2)}`, '#00D27A'],
+                        ride.commAmt > 0 && ['Commission', `-₹${Number(ride.commAmt||0).toFixed(2)}`, '#FF4757'],
+                        ride.taxAmt > 0 && ['GST Tax', `-₹${Number(ride.taxAmt||0).toFixed(2)}`, '#FF7B35'],
+                        ride.platformFee > 0 && ['Platform Fee', `-₹${Number(ride.platformFee||0).toFixed(2)}`, '#FF7B35'],
+                        ride.thirdPartyFee > 0 && ['Insurance', `-₹${Number(ride.thirdPartyFee||0).toFixed(2)}`, '#FF7B35'],
+                        ride.extraDeduct > 0 && ['Other Deduction', `-₹${Number(ride.extraDeduct||0).toFixed(2)}`, '#FF4757'],
+                        ride.fuelCost > 0 && ['Fuel Cost', `-₹${Number(ride.fuelCost||0).toFixed(2)}`, '#FCD34D'],
+                      ].filter(Boolean).map(([label, value, color]) => (
+                        <div key={label} style={{ 
+                          display: 'flex', justifyContent: 'space-between', 
+                          marginBottom: '8px', padding: '4px 0' 
+                        }}>
+                          <span style={{ fontSize: '13px', color: theme.subText }}>{label}</span>
+                          <span style={{ 
+                            fontSize: '13px', fontWeight: '700', color, 
+                            fontFamily: 'monospace' 
+                          }}>
+                            {value}
+                          </span>
                         </div>
                       ))}
-                      <div style={{ height: '1px', background: theme.border, margin: '10px 0' }} />
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: '14px', fontWeight: '800', color: theme.text }}>You earned</span>
-                        <span style={{ fontSize: '22px', fontWeight: '900', color: '#00D27A', fontFamily: 'monospace' }}>₹{Number(r.net||0).toFixed(2)}</span>
+                      <div style={{ height: '1px', background: theme.border, margin: '16px 0' }} />
+                      <div style={{ 
+                        display: 'flex', justifyContent: 'space-between', 
+                        alignItems: 'center', marginBottom: '12px' 
+                      }}>
+                        <span style={{ fontSize: '15px', fontWeight: '800', color: theme.text }}>
+                          You earned
+                        </span>
+                        <span style={{ 
+                          fontSize: '26px', fontWeight: '900', 
+                          color: '#00D27A', fontFamily: 'monospace' 
+                        }}>
+                          ₹{Number(ride.net||0).toFixed(2)}
+                        </span>
                       </div>
-                      {r.dist > 0 && r.net > 0 && (
-                        <p style={{ fontSize: '11px', color: theme.subText, margin: '4px 0 10px', textAlign: 'right', fontWeight: '600' }}>
-                          ₹{(r.net / r.dist).toFixed(2)} per km
+                      {ride.dist > 0 && ride.net > 0 && (
+                        <p style={{ 
+                          fontSize: '12px', color: theme.subText, 
+                          textAlign: 'right', fontWeight: '700', marginBottom: '12px' 
+                        }}>
+                          💰 ₹{(ride.net / ride.dist).toFixed(2)} per km
                         </p>
                       )}
-                      {r.notes ? <p style={{ fontSize: '11px', color: theme.subText, fontStyle: 'italic', marginBottom: '10px' }}>📝 {r.notes}</p> : null}
+                      {ride.notes && (
+                        <p style={{ 
+                          fontSize: '12px', color: theme.subText, 
+                          fontStyle: 'italic', marginBottom: '16px', padding: '8px 12px',
+                          background: theme.bg, borderRadius: '8px',
+                          border: `1px solid ${theme.border}`
+                        }}>
+                          📝 {ride.notes}
+                        </p>
+                      )}
                       <button
-                        onClick={(e) => { e.stopPropagation(); onDelete(r.id); }}
-                        style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid #FF4757', background: '#FF475710', color: '#FF4757', fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}
+                        onClick={(e) => { e.stopPropagation(); handleDelete(ride.id); }}
+                        style={{
+                          width: '100%', padding: '12px', borderRadius: '10px',
+                          border: '1px solid #FF4757', background: 'rgba(255,71,87,0.1)',
+                          color: '#FF4757', fontWeight: '700', fontSize: '14px',
+                          cursor: 'pointer', transition: 'all 0.2s'
+                        }}
+                        aria-label={`Delete ${ride.platform} ride`}
                       >
                         🗑️ Delete Ride
                       </button>
@@ -304,73 +519,53 @@ export default function Dashboard({ rides, fuelPercentage, remainingRange, fuelV
                 </div>
               </div>
             );
-          })}
-        </div>
-      )}
-      {/* ── FAB: Add Ride ─────────────────────────────────────────── */}
+          })
+        )}
+      </div>
+
+      {/* FAB */}
       <style>{`
         @keyframes fab-pulse {
-          0%   { box-shadow: 0 0 0 0 rgba(99,102,241,0.55); }
-          70%  { box-shadow: 0 0 0 18px rgba(99,102,241,0); }
+          0% { box-shadow: 0 0 0 0 rgba(99,102,241,0.6); }
+          70% { box-shadow: 0 0 0 20px rgba(99,102,241,0); }
           100% { box-shadow: 0 0 0 0 rgba(99,102,241,0); }
         }
         @keyframes fab-pop {
-          0%   { transform: scale(1); }
-          40%  { transform: scale(0.88); }
+          0% { transform: scale(1); }
+          50% { transform: scale(0.9); }
           100% { transform: scale(1); }
         }
         .fab-btn {
-          animation: fab-pulse 2.2s ease-out infinite;
+          animation: fab-pulse 2s ease-out infinite;
         }
         .fab-btn:active {
-          animation: fab-pop 0.2s ease forwards;
+          animation: fab-pop 0.2s ease;
         }
       `}</style>
-
-      {/* Fixed FAB — sits above bottom nav */}
       <div style={{
-        position: 'fixed',
-        bottom: '90px',        /* clears the 75px nav + gap */
-        left: '50%',
-        transform: 'translateX(-50%)',
-        zIndex: 500,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: '6px',
+        position: 'fixed', bottom: '95px', left: '50%', transform: 'translateX(-50%)',
+        zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px'
       }}>
-        {/* Label bubble */}
         <div style={{
-          backgroundColor: theme.card,
-          border: `1px solid ${theme.border}`,
-          borderRadius: '20px',
-          padding: '4px 12px',
-          fontSize: '11px',
-          fontWeight: '800',
-          color: theme.subText,
-          letterSpacing: '0.5px',
-          whiteSpace: 'nowrap',
+          backgroundColor: theme.card, border: `1px solid ${theme.border}`,
+          borderRadius: '20px', padding: '6px 16px', fontSize: '12px',
+          fontWeight: '800', color: theme.text, letterSpacing: '0.5px'
         }}>
-          LOG RIDE
+          ADD RIDE
         </div>
-
-        {/* The FAB circle */}
         <button
           className="fab-btn"
           onClick={handleFabClick}
           style={{
-            width: '62px', height: '62px',
-            borderRadius: '50%', border: 'none',
-            background: 'linear-gradient(135deg, #818CF8, #6366f1)',
-            color: '#fff',
-            fontSize: '28px',
-            cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            transform: fabPressed ? 'scale(0.88)' : 'scale(1)',
-            transition: 'transform 0.15s ease',
+            width: '68px', height: '68px', borderRadius: '50%', border: 'none',
+            background: 'linear-gradient(135deg, #818CF8, #6366f1)', color: '#fff',
+            fontSize: '32px', cursor: 'pointer', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', boxShadow: '0 8px 25px rgba(99,102,241,0.4)',
+            transition: 'all 0.2s ease', outline: 'none'
           }}
+          aria-label="Add new ride"
         >
-          ＋
+          +
         </button>
       </div>
     </div>

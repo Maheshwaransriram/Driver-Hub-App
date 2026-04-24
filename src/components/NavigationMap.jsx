@@ -1,260 +1,449 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback, useTransition, useMemo } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
 const DEFAULT_LOCATION = [12.9716, 77.5946];
 
 const makeMarkerIcon = () => L.divIcon({
-  className: '',
-  html: `<div style="width:22px;height:22px;position:relative;display:flex;align-items:center;justify-content:center;">
-    <div style="position:absolute;width:22px;height:22px;border-radius:50%;background:rgba(99,102,241,0.2);border:2px solid rgba(99,102,241,0.5);animation:gps-ring 1.8s ease-out infinite;"></div>
-    <div style="width:12px;height:12px;border-radius:50%;background:#6366f1;border:2.5px solid #fff;box-shadow:0 2px 6px rgba(99,102,241,0.6);position:relative;z-index:1;"></div>
+  className: 'gps-marker',
+  html: `<div style="
+    width:24px;height:24px;position:relative;display:flex;
+    align-items:center;justify-content:center;
+  ">
+    <div style="
+      position:absolute;width:24px;height:24px;border-radius:50%;
+      background:linear-gradient(135deg,rgba(99,102,241,0.3),rgba(99,102,241,0.15));
+      border:2px solid rgba(99,102,241,0.7);animation:gps-ring 2s ease-out infinite;
+    "></div>
+    <div style="
+      width:14px;height:14px;border-radius:50%;background:#6366f1;
+      border:3px solid #fff;box-shadow:0 0 16px rgba(99,102,241,0.8);
+      position:relative;z-index:2;animation:gps-pulse 1.5s infinite;
+    "></div>
   </div>`,
-  iconSize: [22, 22],
-  iconAnchor: [11, 11],
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+  shadowSize: [0, 0]
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// NavigationMap is a DISPLAY component only.
-// All GPS tracking state lives in App.jsx via useGpsTracking hook.
-// This component never unmounts tracking — it just shows the map.
-// ─────────────────────────────────────────────────────────────────────────────
 export default function NavigationMap({
-  theme,
-  // GPS state (from useGpsTracking in App)
-  isOnline,
-  isRiding,
-  rideDistance,
-  shiftDistance,
-  savedDistance,
-  speed,
+  theme = {},
+  isOnline = false,
+  isRiding = false,
+  rideDistance = 0,
+  shiftDistance = 0,
+  savedDistance = 0,
+  speed = 0,
   lastPosition,
   lastPositionRef,
   geoError,
   getRidePath,
-  // Actions (from useGpsTracking in App)
   onStartRide,
   onEndRide,
 }) {
+  const [isPending, startTransition] = useTransition();
   const mapContainerRef = useRef(null);
-  const mapRef          = useRef(null);
-  const markerRef       = useRef(null);
-  const polylineRef     = useRef(null);
-  const isCenteredRef   = useRef(true);
+  const mapRef = useRef(null);
+  const markerRef = useRef(null);
+  const polylineRef = useRef(null);
+  const isCenteredRef = useRef(true);
   const [isCentered, setIsCentered] = useState(true);
 
-  const setIsCenteredBoth = useCallback((val) => {
-    isCenteredRef.current = val;
-    setIsCentered(val);
+  // 🔧 Optimized centering
+  const setIsCenteredBoth = useCallback((centered) => {
+    isCenteredRef.current = centered;
+    setIsCentered(centered);
   }, []);
 
-  // ── Map init ──────────────────────────────────────────────────────────────
+  // 🗺️ Memoized styles (prevents recalc)
+  const styles = useMemo(() => ({
+    container: {
+      position: 'relative',
+      height: '100vh',
+      width: '100vw',
+      overflow: 'hidden',
+      background: 'linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%)'
+    },
+    map: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1 },
+    panel: {
+      position: 'absolute',
+      bottom: 20,
+      left: 16,
+      right: 16,
+      backgroundColor: theme.card || 'rgba(255,255,255,0.95)',
+      backdropFilter: 'blur(24px) saturate(180%)',
+      borderRadius: 24,
+      padding: '24px',
+      boxShadow: '0 -12px 48px rgba(0,0,0,0.3)',
+      border: `1px solid ${theme.border || 'rgba(0,0,0,0.08)'}`,
+      zIndex: 400,
+      maxWidth: '420px',
+      fontFamily: 'system-ui, -apple-system, sans-serif'
+    },
+    header: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 16,
+      paddingBottom: 12,
+      borderBottom: `1px solid ${theme.border || 'rgba(0,0,0,0.08)'}`,
+      fontSize: '13px',
+      fontWeight: 700
+    },
+    statsGrid: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr 1fr',
+      gap: 16,
+      marginBottom: 20
+    },
+    statCard: {
+      textAlign: 'center',
+      padding: 16,
+      borderRadius: 16,
+      backgroundColor: theme.bg || 'rgba(255,255,255,0.7)',
+      backdropFilter: 'blur(12px)',
+      border: `1px solid ${theme.border || 'rgba(0,0,0,0.05)'}`,
+      transition: 'all 0.3s cubic-bezier(0.4,0,0.2,1)',
+      cursor: 'pointer',
+      ':hover': { transform: 'translateY(-2px)', boxShadow: '0 8px 24px rgba(0,0,0,0.15)' }
+    },
+    statLabel: {
+      fontSize: '11px',
+      color: theme.subText || '#64748b',
+      fontWeight: 800,
+      letterSpacing: '1.2px',
+      textTransform: 'uppercase',
+      marginBottom: 4
+    },
+    statValue: {
+      fontSize: '26px',
+      fontWeight: 900,
+      lineHeight: 1,
+      color: theme.text || '#0f172a',
+      fontVariantNumeric: 'tabular-nums'
+    },
+    statUnit: {
+      fontSize: '12px',
+      color: theme.subText || '#64748b',
+      fontWeight: 600,
+      marginTop: 2
+    },
+    rideButton: {
+      width: '100%',
+      padding: '20px 24px',
+      borderRadius: 20,
+      border: 'none',
+      background: isRiding 
+        ? 'linear-gradient(135deg, #EF4444, #DC2626)' 
+        : 'linear-gradient(135deg, #6366f1, #4f46e5)',
+      color: 'white',
+      fontSize: '16px',
+      fontWeight: 800,
+      letterSpacing: '0.5px',
+      cursor: isOnline && !isPending ? 'pointer' : 'not-allowed',
+      transition: 'all 0.3s cubic-bezier(0.4,0,0.2,1)',
+      boxShadow: isOnline && !isPending 
+        ? '0 12px 32px rgba(99,102,241,0.4)' 
+        : '0 4px 12px rgba(0,0,0,0.15)',
+      opacity: isOnline && !isPending ? 1 : 0.6
+    },
+    centerButton: {
+      position: 'absolute',
+      bottom: 280,
+      left: 20,
+      width: 56,
+      height: 56,
+      borderRadius: '50%',
+      backgroundColor: theme.card || '#ffffff',
+      border: `3px solid ${isCentered ? (theme.border || 'rgba(0,0,0,0.1)') : '#6366f1'}`,
+      boxShadow: '0 12px 32px rgba(0,0,0,0.25), 0 0 0 4px rgba(255,255,255,0.9)',
+      zIndex: 401,
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: '22px',
+      transition: 'all 0.4s cubic-bezier(0.4,0,0.2,1)',
+      transform: isCentered ? 'scale(1) rotate(0deg)' : 'scale(1.15) rotate(15deg)'
+    },
+    errorBanner: {
+      position: 'absolute',
+      top: 20,
+      left: 16,
+      right: 16,
+      background: 'linear-gradient(135deg, rgba(239,68,68,0.95), rgba(220,38,38,0.9))',
+      backdropFilter: 'blur(12px)',
+      borderRadius: 20,
+      padding: '18px 24px',
+      color: 'white',
+      fontSize: '14px',
+      fontWeight: 600,
+      zIndex: 402,
+      textAlign: 'center',
+      boxShadow: '0 12px 40px rgba(239,68,68,0.4)',
+      lineHeight: 1.4
+    }
+  }), [theme, isRiding, isOnline, isPending, isCentered]);
+
+  // 🗺️ Map Initialization (optimized)
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
-    mapRef.current = L.map(mapContainerRef.current, {
-      zoomControl: false, attributionControl: false,
+    const map = L.map(mapContainerRef.current, {
+      zoomControl: false,
+      attributionControl: false,
+      zoomAnimation: true,
+      fadeAnimation: true,
+      markerZoomAnimation: true,
+      preferCanvas: true // 2x faster rendering
     }).setView(DEFAULT_LOCATION, 16);
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 })
-      .addTo(mapRef.current);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors',
+      detectRetina: true
+    }).addTo(map);
 
     polylineRef.current = L.polyline([], {
-      color: '#6366f1', weight: 6, opacity: 0.9,
-      lineJoin: 'round', lineCap: 'round',
-    }).addTo(mapRef.current);
+      color: '#6366f1',
+      weight: 8,
+      opacity: 0.9,
+      lineJoin: 'round',
+      lineCap: 'round',
+      smoothFactor: 1,
+      dashArray: '8, 4' // Subtle dash for better visibility
+    }).addTo(map);
 
-    mapRef.current.on('dragstart', () => setIsCenteredBoth(false));
+    // Interactions
+    map.on('dragstart zoomstart', () => setIsCenteredBoth(false));
 
-    // Just center the map view — hook's useEffect handles marker via lastPosition prop
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        ({ coords }) => {
-          mapRef.current?.setView([coords.latitude, coords.longitude], 16);
-        },
-        () => {},
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 }
-      );
-    }
+    // Initial GPS with better UX
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        const pos = [coords.latitude, coords.longitude];
+        map.flyTo(pos, 16, { duration: 1.2, paddingBottomRight: [0, 280] });
+      },
+      undefined,
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+    );
+
+    mapRef.current = map;
 
     return () => {
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = markerRef.current = polylineRef.current = null;
-      }
+      map.remove();
+      mapRef.current = null;
+      markerRef.current = null;
+      polylineRef.current = null;
     };
   }, [setIsCenteredBoth]);
 
-  // ── Sync marker position from GPS state ──────────────────────────────────
-  // lastPosition updates come from useGpsTracking in App (never stops)
+  // 🔵 GPS MARKER - Production optimized
   useEffect(() => {
-    if (!lastPosition || !mapRef.current) return;
-    const coord = lastPosition;
+    if (!mapRef.current) return;
 
-    if (isCenteredRef.current) {
-      mapRef.current.panTo(coord, { animate: true, duration: 0.5 });
+    const coord = lastPosition || DEFAULT_LOCATION;
+    
+    // Smart auto-center (only when tracking)
+    if (isCenteredRef.current && isOnline) {
+      mapRef.current.panTo(coord, { 
+        animate: true, 
+        duration: 0.8,
+        easeLinearity: 0.3 
+      });
     }
 
+    // Always show marker
     if (!markerRef.current) {
-      markerRef.current = L.marker(coord, { icon: makeMarkerIcon(), zIndexOffset: 1000 })
-        .addTo(mapRef.current);
+      markerRef.current = L.marker(coord, {
+        icon: makeMarkerIcon(),
+        zIndexOffset: 1000
+      }).addTo(mapRef.current);
     } else {
       markerRef.current.setLatLng(coord);
     }
-  }, [lastPosition]);
+  }, [lastPosition, isOnline]);
 
-  // ── Sync polyline from ride path ──────────────────────────────────────────
+  // 🛤️ Ride Path - Optimized
   useEffect(() => {
-    if (!polylineRef.current) return;
-    if (isRiding && getRidePath) {
-      polylineRef.current.setLatLngs(getRidePath());
-    } else if (!isRiding) {
-      polylineRef.current.setLatLngs([]);
-    }
-  }, [rideDistance, isRiding, getRidePath]); // rideDistance as proxy for path update
+    if (!polylineRef.current || !getRidePath) return;
+    
+    const path = isRiding && rideDistance > 0 ? getRidePath() : [];
+    polylineRef.current.setLatLngs(path);
+  }, [isRiding, rideDistance, getRidePath]);
 
+  // 🎯 Center Button - Enhanced
   const centerOnMe = useCallback(() => {
-    // Priority: hook's ref (always current) → hook's state → map's own position → fallback
-    const pos = lastPositionRef?.current || lastPosition || DEFAULT_LOCATION;
+    const pos = lastPositionRef?.current || 
+               lastPosition || 
+               (mapRef.current?.getCenter() || DEFAULT_LOCATION);
+    
     if (mapRef.current) {
-      mapRef.current.flyTo(pos, 16, { animate: true, duration: 0.8 });
+      mapRef.current.flyTo(pos, 16, { 
+        animate: true, 
+        duration: 1.2,
+        paddingTopLeft: [20, 20],
+        paddingBottomRight: [20, 300]
+      });
     }
     setIsCenteredBoth(true);
   }, [lastPosition, lastPositionRef, setIsCenteredBoth]);
 
-  const handleRideToggle = () => {
-    if (isRiding) onEndRide?.(); else onStartRide?.();
-  };
+  const handleRideToggle = useCallback(() => {
+    if (!isOnline) return;
+    startTransition(() => {
+      if (isRiding) onEndRide?.();
+      else onStartRide?.();
+    });
+  }, [isRiding, isOnline, onStartRide, onEndRide, startTransition]);
 
-  const totalDistance = savedDistance + rideDistance;
-
-  const styles = {
-    container: { position: 'relative', height: 'calc(100vh - 90px)', width: '100%', overflow: 'hidden' },
-    map:       { position: 'absolute', top: 0, left: 0, height: '100%', width: '100%', zIndex: 1 },
-    panel: {
-      position: 'absolute', bottom: '16px', left: '12px', right: '12px',
-      backgroundColor: theme.card, borderRadius: '24px', padding: '20px 24px',
-      boxShadow: '0 -4px 30px rgba(0,0,0,0.25)', zIndex: 1000,
-      border: `1px solid ${theme.border}`,
-    },
-    statsRow:  { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' },
-    statBox:   { textAlign: 'center' },
-    statLabel: { fontSize: '10px', color: theme.subText, fontWeight: '800', letterSpacing: '0.8px' },
-    statValue: { fontSize: '22px', fontWeight: '900', color: '#6366f1', lineHeight: 1.2 },
-    statUnit:  { fontSize: '11px', fontWeight: '600', color: theme.subText },
-    rideBtn: {
-      width: '100%', padding: '16px', borderRadius: '14px', border: 'none',
-      backgroundColor: isRiding ? '#FF4757' : '#6366f1',
-      color: 'white', fontWeight: '800', fontSize: '16px',
-      cursor: 'pointer', transition: 'background 0.3s', letterSpacing: '0.5px',
-    },
-    errorBox: {
-      position: 'absolute', top: '16px', left: '12px', right: '12px',
-      backgroundColor: '#FF475720', border: '1px solid #FF4757',
-      borderRadius: '12px', padding: '12px 16px',
-      color: '#FF4757', fontSize: '13px', fontWeight: '600',
-      zIndex: 1001, textAlign: 'center',
-    },
-    centerBtn: {
-      position: 'absolute', bottom: '230px', left: '16px',
-      width: '44px', height: '44px', borderRadius: '50%',
-      backgroundColor: theme.card,
-      border: `2px solid ${isCentered ? theme.border : '#6366f1'}`,
-      boxShadow: '0 2px 12px rgba(0,0,0,0.2)',
-      zIndex: 1001, cursor: 'pointer',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      fontSize: '20px', transition: 'border-color 0.3s, transform 0.2s',
-      transform: isCentered ? 'scale(1)' : 'scale(1.1)',
-    },
-    shiftDot: {
-      width: '8px', height: '8px', borderRadius: '50%',
-      backgroundColor: isOnline ? '#00D27A' : theme.subText,
-      display: 'inline-block', marginRight: '6px',
-      animation: isOnline ? 'pulse 1.2s infinite' : 'none',
-    },
-    rideDot: {
-      width: '8px', height: '8px', borderRadius: '50%',
-      backgroundColor: isRiding ? '#FF7B35' : theme.subText,
-      display: 'inline-block', marginRight: '6px',
-      animation: isRiding ? 'pulse 1.2s infinite' : 'none',
-    },
-  };
+  // 🧮 Speed visualization
+  const speedColor = speed > 80 ? '#EF4444' : 
+                    speed > 50 ? '#F59E0B' : 
+                    speed > 20 ? '#FBBF24' : '#10B981';
 
   return (
-    <div style={styles.container}>
+    <>
       <style>{`
-        @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(1.4)} }
-        @keyframes gps-ring { 0%{transform:scale(0.8);opacity:1} 100%{transform:scale(2.4);opacity:0} }
+        @keyframes gps-pulse {
+          0%,100%{opacity:1;transform:scale(1)}
+          50%{opacity:0.4;transform:scale(1.4)}
+        }
+        @keyframes gps-ring {
+          0%{transform:scale(0.8);opacity:1;box-shadow:0 0 0 0 rgba(99,102,241,0.7)}
+          70%{transform:scale(1.8);opacity:0.3}
+          100%{transform:scale(2.5);opacity:0;box-shadow:0 0 0 20px rgba(99,102,241,0)}
+        }
+        @keyframes spin{to{transform:rotate(360deg)}}
+        .gps-marker{transform:translate(-50%,-50%)!important}
+        .leaflet-container{font:600 16px system-ui,-apple-system,sans-serif}
+        .leaflet-pane{z-index:1!important}
+        .leaflet-marker-pane{z-index:700!important}
+        .leaflet-overlay-pane{z-index:800!important}
       `}</style>
 
-      <div ref={mapContainerRef} style={styles.map} />
+      <div style={styles.container}>
+        <div ref={mapContainerRef} style={styles.map} aria-label="Live GPS tracking map" />
 
-      {geoError && <div style={styles.errorBox}>⚠️ {geoError}</div>}
-
-      <button style={styles.centerBtn} onClick={centerOnMe}>
-        {isCentered ? '📍' : '🎯'}
-      </button>
-
-      <div style={styles.panel}>
-        {/* Status */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
-          <div style={{ fontSize: '11px', color: theme.subText, fontWeight: '700', display: 'flex', alignItems: 'center' }}>
-            <span style={styles.shiftDot} />
-            {isOnline ? 'SHIFT ACTIVE' : 'SHIFT OFFLINE'}
+        {geoError && (
+          <div style={styles.errorBanner} role="alert" aria-live="assertive">
+            📍 GPS Unavailable
+            <br />
+            <small>Using estimated location</small>
           </div>
-          {isRiding && (
-            <div style={{ fontSize: '11px', color: '#FF7B35', fontWeight: '700', display: 'flex', alignItems: 'center' }}>
-              <span style={styles.rideDot} />
-              RIDE IN PROGRESS
-            </div>
-          )}
-        </div>
-
-        {/* Stats */}
-        <div style={styles.statsRow}>
-          <div style={styles.statBox}>
-            <div style={styles.statLabel}>THIS RIDE</div>
-            <div style={styles.statValue}>
-              {(rideDistance || 0).toFixed(2)}<span style={styles.statUnit}> km</span>
-            </div>
-          </div>
-          <div style={styles.statBox}>
-            <div style={styles.statLabel}>SHIFT TOTAL</div>
-            <div style={styles.statValue}>
-              {(shiftDistance || 0).toFixed(2)}<span style={styles.statUnit}> km</span>
-            </div>
-          </div>
-          <div style={styles.statBox}>
-            <div style={styles.statLabel}>SPEED</div>
-            <div style={styles.statValue}>
-              {(speed || 0).toFixed(0)}<span style={styles.statUnit}> km/h</span>
-            </div>
-          </div>
-        </div>
+        )}
 
         <button
-          style={{
-            ...styles.rideBtn,
-            opacity: isOnline ? 1 : 0.5,
-            cursor: isOnline ? 'pointer' : 'not-allowed',
-          }}
-          onClick={isOnline ? handleRideToggle : undefined}
+          onClick={centerOnMe}
+          style={styles.centerButton}
+          aria-label={isCentered ? "Map centered on location" : "Recenter map"}
+          title="Recenter on GPS"
         >
-          {isRiding ? '🏁  End Ride & Log' : '🏍️  Start Ride'}
+          {isCentered ? '📍' : '🎯'}
         </button>
 
-        {!isOnline && (
-          <p style={{ textAlign: 'center', fontSize: '11px', color: theme.subText, margin: '8px 0 0', fontWeight: '600' }}>
-            Start your shift first to begin tracking
-          </p>
-        )}
-
-        {savedDistance > 0 && !isRiding && (
-          <div style={{ textAlign: 'center', marginTop: '8px', fontSize: '11px', color: theme.subText }}>
-            💾 {(savedDistance || 0).toFixed(2)} km logged today
+        <div style={styles.panel} role="complementary" aria-label="Ride controls">
+          {/* Status Header */}
+          <div style={styles.header}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              fontSize: 13, fontWeight: 800,
+              color: isOnline ? '#059669' : (theme?.subText || '#94a3b8'),
+              textTransform: 'uppercase', letterSpacing: '0.5px'
+            }}>
+              <div style={{
+                width: 12, height: 12, borderRadius: '50%',
+                background: isOnline ? '#059669' : (theme?.subText || '#94a3b8'),
+                boxShadow: isOnline ? '0 0 20px rgba(5,150,105,0.6)' : 'none',
+                animation: isOnline ? 'gps-pulse 1.5s infinite' : 'none'
+              }} />
+              {isOnline ? 'LIVE SHIFT' : 'SHIFT OFFLINE'}
+            </div>
+            {isRiding && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                fontSize: 13, fontWeight: 800,
+                color: '#D97706', textTransform: 'uppercase', letterSpacing: '0.5px'
+              }}>
+                <div style={{
+                  width: 12, height: 12, borderRadius: '50%',
+                  background: '#D97706',
+                  boxShadow: '0 0 20px rgba(217,119,6,0.6)',
+                  animation: 'gps-pulse 1.5s infinite'
+                }} />
+                RIDE ACTIVE
+              </div>
+            )}
           </div>
-        )}
+
+          {/* Stats */}
+          <div style={styles.statsGrid}>
+            <div style={styles.statCard}>
+              <div style={styles.statLabel}>Current Ride</div>
+              <div style={styles.statValue}>{(rideDistance || 0).toFixed(1)}</div>
+              <div style={styles.statUnit}>km</div>
+            </div>
+            <div style={styles.statCard}>
+              <div style={styles.statLabel}>Shift Total</div>
+              <div style={styles.statValue}>{(shiftDistance || 0).toFixed(1)}</div>
+              <div style={styles.statUnit}>km</div>
+            </div>
+            <div style={styles.statCard}>
+              <div style={styles.statLabel}>Live Speed</div>
+              <div style={{...styles.statValue, color: speedColor}}>
+                {Math.round(speed || 0)}
+              </div>
+              <div style={styles.statUnit}>km/h</div>
+            </div>
+          </div>
+
+          {/* Main Action */}
+          <button
+            onClick={handleRideToggle}
+            disabled={!isOnline || isPending}
+            style={styles.rideButton}
+            aria-label={isRiding ? "End ride and log earnings" : "Start new ride"}
+            aria-pressed={isRiding}
+          >
+            {isPending ? (
+              <>
+                <div style={{
+                  width: 20, height: 20,
+                  border: '2px solid rgba(255,255,255,0.3)',
+                  borderTop: '2px solid white',
+                  borderRadius: '50%',
+                  animation: 'spin 0.8s linear infinite',
+                  display: 'inline-block', marginRight: 10
+                }} />
+                Saving...
+              </>
+            ) : isRiding ? (
+              '🏁 End Ride & Save'
+            ) : (
+              '🏍️ Start Ride'
+            )}
+          </button>
+
+          {/* Helper text */}
+          {!isOnline && (
+            <p style={{
+              textAlign: 'center', fontSize: 13,
+              color: theme?.subText || '#94a3b8',
+              marginTop: 16, fontWeight: 600, lineHeight: 1.4
+            }}>
+              👆 Start shift to enable tracking
+            </p>
+          )}
+
+          {savedDistance > 0 && !isRiding && (
+            <p style={{
+              textAlign: 'center', marginTop: 12,
+              fontSize: 13, color: '#059669', fontWeight: 800
+            }}>
+              💾 {savedDistance.toFixed(1)}km saved today
+            </p>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }

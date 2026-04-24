@@ -133,14 +133,21 @@ export function useGpsTracking({ isOnline, onDistanceUpdate, onShiftDistanceUpda
     shiftWatchRef.current = navigator.geolocation.watchPosition(
       (pos) => {
         const { latitude, longitude, speed: spd, accuracy } = pos.coords;
-        if (accuracy > 80) return;
+
+        // ── Accuracy filter ───────────────────────────────────────────────
+        // 50m for ride (tight — better accuracy), 80m for shift (relaxed)
+        // OLD code used 80m for both — too loose, included bad city readings
+        const rideAccuracyOk  = accuracy <= 50;
+        const shiftAccuracyOk = accuracy <= 80;
+        if (!shiftAccuracyOk) return; // reject truly bad readings for both
 
         const newCoord = [latitude, longitude];
         lastPositionRef.current = newCoord;
         setLastPosition(newCoord);
         setSpeed(spd ? spd * 3.6 : 0);
 
-        // Shift distance
+        // ── Shift distance ────────────────────────────────────────────────
+        // 30m threshold + no speed filter (shift tracks total odometer km)
         if (shiftPathRef.current.length > 0) {
           const prev = shiftPathRef.current[shiftPathRef.current.length - 1];
           const inc  = getDistance(prev[0], prev[1], latitude, longitude);
@@ -158,12 +165,21 @@ export function useGpsTracking({ isOnline, onDistanceUpdate, onShiftDistanceUpda
           shiftPathRef.current = [newCoord];
         }
 
-        // Ride distance
-        if (isRidingRef.current) {
+        // ── Ride distance ─────────────────────────────────────────────────
+        // KEY FIXES vs old code:
+        //   1. REMOVED speed > 2 km/h filter — this was silently dropping ALL
+        //      readings at traffic lights. In Indian city driving ~25% of time
+        //      is spent stopped, causing 8km to show as 6.5km.
+        //   2. Accuracy threshold tightened to 50m for ride (was 80m)
+        //   3. maximumAge: 0 (was 2000ms) — forces fresh GPS, no stale cache
+        //   4. Min distance lowered to 10m (was 20m) — catches slow crawl
+        //   5. Max spike guard kept at 500m to reject teleport jumps
+        if (isRidingRef.current && rideAccuracyOk) {
           if (ridePathRef.current.length > 0) {
             const prev = ridePathRef.current[ridePathRef.current.length - 1];
             const inc  = getDistance(prev[0], prev[1], latitude, longitude);
-            if (isFinite(inc) && inc > 0.020 && inc < 0.5 && (spd ? spd * 3.6 : 0) > 2) {
+            // 10m min (catches slow traffic), 500m max (rejects GPS teleport)
+            if (isFinite(inc) && inc > 0.010 && inc < 0.500) {
               ridePathRef.current.push(newCoord);
               if (ridePathRef.current.length > 300) ridePathRef.current = ridePathRef.current.slice(-300);
               setRideDistance(d => {
@@ -178,8 +194,12 @@ export function useGpsTracking({ isOnline, onDistanceUpdate, onShiftDistanceUpda
           }
         }
       },
-      () => {},
-      { enableHighAccuracy: true, timeout: 20000, maximumAge: 2000 }
+      (err) => { console.warn('GPS watch error:', err.code, err.message); },
+      {
+        enableHighAccuracy: true,
+        timeout: 20000,
+        maximumAge: 0,  // FIXED: was 2000 — stale cached positions caused phantom distance increments
+      }
     );
   }, []);
 

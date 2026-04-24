@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useTransition, Suspense, useMemo } from "react";
 import Dashboard from "./components/Dashboard";
 import ShiftManagement from "./components/ShiftManagement";
 import SettingsScreen from "./components/SettingsScreen";
@@ -6,8 +6,8 @@ import AddRide from "./components/NewRide";
 import RateCard, { DEFAULT_RATE_CARDS, calculateFareFromRateCard } from "./components/RateCard";
 import NavButton from "./components/NavButton";
 import FuelTracking from "./components/FuelTracking";
-import { themes, globalStyles } from "./theme/theme";
 import NavigationMap from "./components/NavigationMap";
+import { themes, globalStyles } from "./theme/theme";
 import { useGpsTracking } from "./hooks/UseGpsTracking";
 
 const DEFAULT_SETTINGS = {
@@ -19,365 +19,394 @@ const DEFAULT_SETTINGS = {
 
 const TODAY = new Date().toDateString();
 
-export default function App() {
-  const [screen,   setScreen]   = useState("dashboard");
-  // Persist isOnline — shift stays ON until driver manually ends it
-  const [isOnline, setIsOnline] = useState(() => {
-    try {
-      // Only restore if it was active today
-      const raw = localStorage.getItem("dh_shift_online");
-      if (!raw) return false;
-      const { online, date } = JSON.parse(raw);
-      return date === new Date().toDateString() ? (online || false) : false;
-    } catch { return false; }
-  });
-
-  const [themeMode, setThemeMode] = useState(
-    () => localStorage.getItem("dh_theme") || "dark"
-  );
-  const [rides, setRides] = useState(() => {
-    try {
-      const raw = localStorage.getItem("dh_rides");
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) { localStorage.removeItem("dh_rides"); return []; }
-      // Strict validation — any corrupt entry could cause a render crash
-      return parsed.filter(r =>
-        r && typeof r === 'object' &&
-        typeof r.id        === 'number' &&
-        typeof r.net       === 'number' && isFinite(r.net) &&
-        typeof r.fare      === 'number' && isFinite(r.fare) &&
-        typeof r.dist      === 'number' && isFinite(r.dist) &&
-        typeof r.timestamp === 'string' &&
-        typeof r.platform  === 'string'
+// ── Error boundary — prevents white screen of death ──────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  componentDidCatch(error, info) { console.error('App crash:', error, info); }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '40px', textAlign: 'center', background: '#fef3c7', minHeight: '100vh', fontFamily: 'system-ui' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
+          <h2 style={{ color: '#92400e', margin: '0 0 12px' }}>Something went wrong</h2>
+          <p style={{ color: '#92400e', fontSize: '14px', margin: '0 0 24px' }}>Your ride data is safe.</p>
+          <button onClick={() => window.location.reload()}
+            style={{ padding: '12px 28px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: '700', fontSize: '15px', cursor: 'pointer' }}>
+            🔄 Restart App
+          </button>
+          <details style={{ marginTop: '20px', fontSize: '12px', color: '#78350f' }}>
+            <summary style={{ cursor: 'pointer' }}>Error details</summary>
+            <pre style={{ textAlign: 'left', padding: '12px', background: '#fef9c3', borderRadius: '8px', marginTop: '8px', overflow: 'auto' }}>
+              {this.state.error?.toString()}
+            </pre>
+          </details>
+        </div>
       );
-    } catch (e) {
-      console.error('Corrupted rides, resetting:', e);
-      localStorage.removeItem("dh_rides");
-      return [];
     }
-  });
-  const [fuelLogs, setFuelLogs] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("dh_fuel") || "[]"); }
-    catch { return []; }
-  });
-  const [settings, setSettings] = useState(() => {
+    return this.props.children;
+  }
+}
+
+// ── Safe number helper ────────────────────────────────────────────────────────
+const safeFloat = (v, fallback = 0) => {
+  const n = parseFloat(v);
+  return (isFinite(n) && n >= 0) ? n : fallback;
+};
+
+// ── Safe localStorage with quota guard ───────────────────────────────────────
+const safeSet = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    // QuotaExceededError — prune rides and retry once
+    if (key === 'dh_rides') {
+      try {
+        const trimmed = (Array.isArray(value) ? value : []).slice(0, 90);
+        localStorage.setItem(key, JSON.stringify(trimmed));
+      } catch { /* give up silently */ }
+    }
+  }
+};
+
+// ── Load from localStorage with date‐aware migration ─────────────────────────
+const loadState = () => {
+  const load = (key, fallback) => {
     try {
-      const s = localStorage.getItem("dh_settings");
-      return s ? { ...DEFAULT_SETTINGS, ...JSON.parse(s) } : DEFAULT_SETTINGS;
-    } catch { return DEFAULT_SETTINGS; }
-  });
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : fallback;
+    } catch { return fallback; }
+  };
 
-  // Per-platform rate cards — deep-merged with defaults so new fields are never missing
-  const [rateCards, setRateCards] = useState(() => {
-    try {
-      const saved = localStorage.getItem("dh_rate_cards");
-      if (!saved) return DEFAULT_RATE_CARDS;
-      const parsed = JSON.parse(saved);
-      // Deep merge per platform — ensures new fields like govtTaxPercent
-      // always have a value even if stored data pre-dates them
-      const merged = {};
-      for (const platform of Object.keys(DEFAULT_RATE_CARDS)) {
-        merged[platform] = { ...DEFAULT_RATE_CARDS[platform], ...(parsed[platform] || {}) };
-      }
-      return merged;
-    } catch { return DEFAULT_RATE_CARDS; }
-  });
+  // Validate ride entries — corrupt entries crash render
+  const rawRides = load('dh_rides', []);
+  const rides = Array.isArray(rawRides) ? rawRides.filter(r =>
+    r && typeof r === 'object' &&
+    typeof r.id        === 'number' &&
+    typeof r.net       === 'number' && isFinite(r.net) &&
+    typeof r.fare      === 'number' && isFinite(r.fare) &&
+    typeof r.dist      === 'number' && isFinite(r.dist) &&
+    typeof r.timestamp === 'string' &&
+    typeof r.platform  === 'string'
+  ) : [];
 
-  // ── navDistance: GPS-tracked km from NavigationMap ────────────────────────
-  // Loaded from localStorage so it survives app close.
-  // Resets automatically each new day (NavigationMap handles the date check).
-  const [navDistance, setNavDistance] = useState(() => {
-    try {
-      const raw = localStorage.getItem("dh_nav_state");
-      if (!raw) return 0;
-      const { savedDistance, date } = JSON.parse(raw);
-      return date === TODAY ? (savedDistance || 0) : 0;
-    } catch { return 0; }
-  });
+  // Validate fuel logs
+  const rawFuel = load('dh_fuel', []);
+  const fuelLogs = Array.isArray(rawFuel) ? rawFuel.filter(l =>
+    l && typeof l === 'object' &&
+    typeof l.id     === 'number' &&
+    typeof l.liters === 'number' && isFinite(l.liters) && l.liters > 0 &&
+    typeof l.amount === 'number' && isFinite(l.amount) && l.amount > 0
+  ) : [];
 
-  const [lastNotifiedRange, setLastNotifiedRange] = useState(null);
-  const [pendingRideDist, setPendingRideDist] = useState(0);
-  const currentTheme = themes[themeMode];
+  // Deep merge rate cards so new fields always have defaults
+  const savedCards = load('dh_rate_cards', {});
+  const rateCards = {};
+  for (const platform of Object.keys(DEFAULT_RATE_CARDS)) {
+    rateCards[platform] = { ...DEFAULT_RATE_CARDS[platform], ...(savedCards[platform] || {}) };
+  }
 
-  // ── GPS tracking — lives at App level so it NEVER stops on screen change ──
-  const handleRideComplete = useCallback((distKm) => {
-    setPendingRideDist(distKm);
-    setScreen("add");
-  }, []);
+  // navDistance — daily reset
+  const navRaw = load('dh_nav_state', null);
+  const navDistance = (navRaw && navRaw.date === TODAY) ? safeFloat(navRaw.savedDistance) : 0;
 
-  const handleNavDistanceUpdate = useCallback((km) => setNavDistance(km), []);
-  const handleShiftDistanceUpdate = useCallback((km) => setShiftDistance(km), []);
+  // isOnline — restore if today's shift was active
+  const onlineRaw = load('dh_shift_online', null);
+  const isOnline = onlineRaw?.date === TODAY ? !!onlineRaw.online : false;
 
-  // shiftDistance stored at App level for ShiftManagement screen display
+  return {
+    rides,
+    fuelLogs,
+    settings: { ...DEFAULT_SETTINGS, ...load('dh_settings', {}) },
+    rateCards,
+    navDistance,
+    isOnline,
+    themeMode: localStorage.getItem('dh_theme') || 'dark',
+  };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+export default function App() {
+  const [isPending, startTransition] = useTransition();
+  const [screen, setScreen] = useState('dashboard');
+
+  // Load persisted state once on mount
+  const initial = useMemo(() => loadState(), []); // eslint-disable-line
+
+  const [isOnline,      setIsOnline]      = useState(initial.isOnline);
+  const [rides,         setRides]         = useState(initial.rides);
+  const [fuelLogs,      setFuelLogs]      = useState(initial.fuelLogs);
+  const [settings,      setSettings]      = useState(initial.settings);
+  const [rateCards,     setRateCards]     = useState(initial.rateCards);
+  const [navDistance,   setNavDistance]   = useState(initial.navDistance);
   const [shiftDistance, setShiftDistance] = useState(0);
+  const [pendingDist,   setPendingDist]   = useState(0);
+  const [themeMode,     setThemeMode]     = useState(initial.themeMode);
+
+  // ── Persistence ─────────────────────────────────────────────────────────
+  useEffect(() => { safeSet('dh_rides',      rides);      }, [rides]);
+  useEffect(() => { safeSet('dh_fuel',       fuelLogs);   }, [fuelLogs]);
+  useEffect(() => { safeSet('dh_settings',   settings);   }, [settings]);
+  useEffect(() => { safeSet('dh_rate_cards', rateCards);  }, [rateCards]);
+  useEffect(() => {
+    localStorage.setItem('dh_theme', themeMode);
+    document.body.style.backgroundColor = themeMode === 'dark' ? '#0B1437' : '#F4F7FE';
+  }, [themeMode]);
+  useEffect(() => {
+    localStorage.setItem('dh_shift_online', JSON.stringify({ online: isOnline, date: TODAY }));
+  }, [isOnline]);
+  useEffect(() => {
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+}, []);
+
+  // ── GPS hook — lives at App level, never stops on screen change ───────────
+  const handleRideComplete = useCallback((distKm) => {
+    setPendingDist(distKm);
+    startTransition(() => setScreen('add'));
+  }, []);
 
   const gps = useGpsTracking({
     isOnline,
-    onDistanceUpdate:      handleNavDistanceUpdate,
-    onShiftDistanceUpdate: handleShiftDistanceUpdate,
+    onDistanceUpdate:      useCallback((km) => setNavDistance(km), []),
+    onShiftDistanceUpdate: useCallback((km) => setShiftDistance(km), []),
     onRideComplete:        handleRideComplete,
   });
 
-  // ── Fuel gauge calculation ────────────────────────────────────────────────
-  // navDistance (GPS) is used as the primary odometer.
-  // Falls back to manual ride distances if GPS tracking hasn't been used yet.
-  const calculateFuelStats = () => {
-    if (fuelLogs.length === 0) return { percentage: 0, range: 0, value: 0, currentLiters: 0 };
+  // ── Theme ────────────────────────────────────────────────────────────────
+  const currentTheme = themes[themeMode] || themes.dark;
 
-    const totalLitersAdded = fuelLogs.reduce((acc, log) => acc + log.liters, 0);
+  // ── Fuel gauge calculation ───────────────────────────────────────────────
+  const fuelStats = useMemo(() => {
+    if (!fuelLogs.length) return { percentage: 0, range: 0, value: 0, currentLiters: 0 };
 
-    // Use GPS distance if available (more accurate), else fall back to ride logs
-    const manualDist = rides.reduce((acc, r) => acc + (r.dist || 0), 0);
-    const totalDistanceDriven = navDistance > 0 ? navDistance : manualDist;
+    const mileage   = Math.max(1, settings.mileage   || 45);
+    const fuelPrice = Math.max(1, settings.fuelPrice  || 103);
+    const totalLiters    = fuelLogs.reduce((s, l) => s + safeFloat(l.liters), 0);
+    const totalDist      = navDistance > 0
+      ? navDistance
+      : rides.reduce((s, r) => s + safeFloat(r.dist), 0);
+    const consumed           = totalDist / mileage;
+    const remainingLiters    = Math.max(0, totalLiters - consumed);
 
-    const consumedLiters         = totalDistanceDriven / settings.mileage;
-    const currentLitersRemaining = Math.max(0, totalLitersAdded - consumedLiters);
-    const remainingRange         = currentLitersRemaining * settings.mileage;
-
-    const lastLog            = fuelLogs[0];
-    const lastFillRange      = lastLog.liters * settings.mileage;
-    const distBeforeLastLog  = rides
+    const lastLog         = fuelLogs[0];
+    const lastFillRange   = safeFloat(lastLog.liters) * mileage;
+    const distBeforeLast  = rides
       .filter(r => r.id < lastLog.id)
-      .reduce((acc, r) => acc + (r.dist || 0), 0);
-    const litersBeforeLastLog = fuelLogs.slice(1).reduce((acc, l) => acc + l.liters, 0);
-    const rangeBeforeLastLog  = Math.max(0,
-      (litersBeforeLastLog * settings.mileage) - distBeforeLastLog
-    );
-    const currentMaxRange = lastFillRange + rangeBeforeLastLog;
-    const percentage      = currentMaxRange > 0
-      ? (remainingRange / currentMaxRange) * 100 : 0;
-    const currentValue    = currentLitersRemaining * settings.fuelPrice;
+      .reduce((s, r) => s + safeFloat(r.dist), 0);
+    const prevLiters      = fuelLogs.slice(1).reduce((s, l) => s + safeFloat(l.liters), 0);
+    const rangeBeforeLast = Math.max(0, prevLiters * mileage - distBeforeLast);
+    const maxRange        = lastFillRange + rangeBeforeLast;
+    const percentage      = maxRange > 0 ? (remainingLiters * mileage / maxRange) * 100 : 0;
 
     return {
-      percentage:    Math.min(100, percentage),
-      range:         remainingRange,
-      value:         currentValue,
-      currentLiters: currentLitersRemaining,
+      percentage:    Math.min(100, Math.max(0, percentage)),
+      range:         Math.max(0, remainingLiters * mileage),
+      value:         Math.max(0, remainingLiters * fuelPrice),
+      currentLiters: Math.max(0, remainingLiters),
     };
-  };
+  }, [fuelLogs, navDistance, rides, settings]);
 
-  const {
-    percentage: fuelPercentage,
-    range:      remainingRange,
-    value:      fuelValue,
-    currentLiters,
-  } = calculateFuelStats();
-
-  // ── Safe localStorage — prevents quota crash from killing the app ────────
-  const safeSetItem = useCallback((key, value) => {
+  // ── Fuel alert ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!fuelLogs.length || fuelStats.range > 16) return;
+    if (typeof Notification === 'undefined') return;   // guard: Android WebView
+    if (Notification.permission !== 'granted') return; // only fire when permitted
     try {
-      localStorage.setItem(key, value);
-    } catch (e) {
-      // QuotaExceededError — prune oldest rides to free space
-      if (key === "dh_rides") {
-        try {
-          const current = JSON.parse(localStorage.getItem("dh_rides") || "[]");
-          const pruned  = current.slice(0, 90); // keep latest 90
-          localStorage.setItem("dh_rides", JSON.stringify(pruned));
-          setRides(pruned);
-        } catch {}
-      }
-    }
-  }, []);
+      new Notification('⛽ Low Fuel', {
+        body: `Only ${fuelStats.range.toFixed(1)} km remaining. Refill soon!`,
+      });
+    } catch { /* swallow any remaining platform exceptions */ }
+  }, [fuelStats.range, fuelLogs.length]);
 
-  // ── Persistence ───────────────────────────────────────────────────────────
-  useEffect(() => { safeSetItem("dh_rides",      JSON.stringify(rides));     }, [rides, safeSetItem]);
-  useEffect(() => { safeSetItem("dh_fuel",        JSON.stringify(fuelLogs));  }, [fuelLogs, safeSetItem]);
-  useEffect(() => { safeSetItem("dh_settings",    JSON.stringify(settings));  }, [settings, safeSetItem]);
-  useEffect(() => { safeSetItem("dh_rate_cards",  JSON.stringify(rateCards)); }, [rateCards, safeSetItem]);
-  useEffect(() => {
-    localStorage.setItem("dh_theme", themeMode);
-    document.body.style.backgroundColor = themeMode === 'dark' ? '#050B20' : '#E2E8F0';
-  }, [themeMode]);
-
-  // Persist shift online state so it survives app close
-  useEffect(() => {
-    localStorage.setItem("dh_shift_online", JSON.stringify({
-      online: isOnline,
-      date: new Date().toDateString(),
-    }));
-  }, [isOnline]);
-
-  // ── Fuel alert ────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (fuelLogs.length === 0) return;
-    const thresholds      = [15, 10, 5, 0];
-    const currentThreshold = thresholds.find(t => remainingRange <= t);
-    if (currentThreshold !== undefined && lastNotifiedRange !== currentThreshold) {
-      if (Notification.permission === "granted") {
-        new Notification("Fuel Alert", {
-          body: `Range: ${remainingRange.toFixed(1)} km left. Refill soon!`,
-          icon: "⛽",
-        });
-        setLastNotifiedRange(currentThreshold);
-      }
-    }
-    if (remainingRange > 16) setLastNotifiedRange(null);
-  }, [remainingRange, fuelLogs, lastNotifiedRange]);
-
-  // ── Handlers ──────────────────────────────────────────────────────────────
-  const addRide = (rideData) => {
+  // ── addRide — full fare calculation ──────────────────────────────────────
+  // FIX: was just storing raw onSave data without calculating deductions
+  const addRide = useCallback((rideData) => {
     const rc       = rateCards[rideData.platform] || DEFAULT_RATE_CARDS[rideData.platform] || DEFAULT_RATE_CARDS.Rapido;
     const isNight  = (() => { const h = new Date().getHours(); return h >= 23 || h < 6; })();
     const calc     = calculateFareFromRateCard(rc, rideData.dist, rideData.timeMin || 0, isNight);
-    const fuelCost     = (rideData.dist / settings.mileage) * settings.fuelPrice;
-    const extraFareN   = rideData.extraFare   || 0;
-    const extraDeductN = rideData.extraDeduct || 0;
+    const fuelCost      = (safeFloat(rideData.dist) / Math.max(1, settings.mileage)) * settings.fuelPrice;
+    const extraFareN    = safeFloat(rideData.extraFare);
+    const extraDeductN  = safeFloat(rideData.extraDeduct);
 
     let finalFare, commAmt, govtTax, platformFee, thirdPartyFee, net;
+
     if (rideData.fare > 0) {
-      finalFare     = rideData.fare;
+      finalFare     = safeFloat(rideData.fare);
       commAmt       = rc?.commissionType === 'flat'
-        ? (rc?.commission || 0)
-        : finalFare * (rc?.commission || 0) / 100;
-      govtTax       = finalFare * (rc?.govtTaxPercent || 0) / 100;
-      platformFee   = rc?.platformFee   || 0;
-      thirdPartyFee = rc?.thirdPartyFee || 0;
+        ? safeFloat(rc?.commission)
+        : finalFare * safeFloat(rc?.commission) / 100;
+      govtTax       = finalFare * safeFloat(rc?.govtTaxPercent) / 100;
+      platformFee   = safeFloat(rc?.platformFee);
+      thirdPartyFee = safeFloat(rc?.thirdPartyFee);
       net = finalFare + extraFareN - commAmt - govtTax - platformFee - thirdPartyFee - extraDeductN - fuelCost;
     } else {
       finalFare     = calc.gross;
       commAmt       = calc.commission;
       govtTax       = calc.gst;
-      platformFee   = rc?.platformFee   || 0;
-      thirdPartyFee = rc?.thirdPartyFee || 0;
+      platformFee   = safeFloat(rc?.platformFee);
+      thirdPartyFee = safeFloat(rc?.thirdPartyFee);
       net = calc.net + extraFareN - extraDeductN - fuelCost;
     }
 
-    setRides(prev => [{
+    const ride = {
       ...rideData,
       id:            Date.now(),
-      fare:          Number(finalFare || 0),
-      net:           Number(net || 0),
-      commAmt:       Number(commAmt || 0),
-      taxAmt:        Number(govtTax || 0),
-      platformFee:   Number(platformFee || 0),
-      thirdPartyFee: Number(thirdPartyFee || 0),
-      extraFare:     Number(extraFareN || 0),
-      extraDeduct:   Number(extraDeductN || 0),
-      fuelCost:      Number(fuelCost || 0),
+      fare:          parseFloat((finalFare     || 0).toFixed(2)),
+      net:           parseFloat((net           || 0).toFixed(2)),
+      commAmt:       parseFloat((commAmt       || 0).toFixed(2)),
+      taxAmt:        parseFloat((govtTax       || 0).toFixed(2)),
+      platformFee:   parseFloat((platformFee   || 0).toFixed(2)),
+      thirdPartyFee: parseFloat((thirdPartyFee || 0).toFixed(2)),
+      extraFare:     parseFloat((extraFareN    || 0).toFixed(2)),
+      extraDeduct:   parseFloat((extraDeductN  || 0).toFixed(2)),
+      fuelCost:      parseFloat((fuelCost      || 0).toFixed(2)),
+      dist:          parseFloat((safeFloat(rideData.dist)).toFixed(3)),
       isNight,
-      timestamp:     new Date().toISOString(),
-    }, ...prev]);
-    setScreen("dashboard");
-  };
+      timestamp: new Date().toISOString(),
+    };
 
-  const deleteRide = (id) => setRides(r => r.filter(x => x.id !== id));
+    setRides(prev => [ride, ...prev]);
+    setPendingDist(0);
+    startTransition(() => setScreen('dashboard'));
+  }, [rateCards, settings]);
 
-  const handleSetIsOnline = (val) => {
+  // ── Shift end ────────────────────────────────────────────────────────────
+  const handleSetIsOnline = useCallback((val) => {
     setIsOnline(val);
     if (!val) {
       setShiftDistance(0);
-      localStorage.removeItem("dh_shift_state");
-      localStorage.removeItem("dh_shift_online");
+      localStorage.removeItem('dh_shift_state');
+      localStorage.removeItem('dh_shift_online');
     }
-  };
+  }, []);
 
-  const todayRides     = rides.filter(
-    r => new Date(r.timestamp).toDateString() === TODAY
-  );
-  const todayNetProfit = todayRides.reduce((acc, r) => acc + (r.net || 0), 0);
+  // ── Navigation helper ────────────────────────────────────────────────────
+  const navigateTo = useCallback((s) => startTransition(() => setScreen(s)), []);
 
+  const todayRides     = rides.filter(r => new Date(r.timestamp).toDateString() === TODAY);
+  const todayNetProfit = todayRides.reduce((s, r) => s + safeFloat(r.net), 0);
+
+  // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div style={{ ...globalStyles.appWrapper, backgroundColor: currentTheme.bg, color: currentTheme.text }}>
-      <div style={globalStyles.container}>
+    <ErrorBoundary>
+      <div style={{ ...globalStyles.appWrapper, backgroundColor: currentTheme.bg, color: currentTheme.text }}>
+        <div style={globalStyles.container}>
 
-        {screen === "dashboard" && (
-          <Dashboard
-            rides={rides}
-            fuelPercentage={fuelPercentage}
-            remainingRange={remainingRange}
-            fuelValue={fuelValue}
-            currentLiters={currentLiters}
-            navDistance={navDistance}
-            settings={settings}
-            theme={currentTheme}
-            onDelete={deleteRide}
-            onAddRide={() => setScreen("add")}
-          />
-        )}
+          {/* Loading overlay during screen transitions */}
+          {isPending && (
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, height: '3px', zIndex: 9999, background: currentTheme.accent, animation: 'progress 0.4s ease' }} />
+          )}
 
-        {screen === "shifts" && (
-          <ShiftManagement
-            isOnline={isOnline}
-            setIsOnline={handleSetIsOnline}
-            theme={currentTheme}
-            shiftDistance={shiftDistance}
-          />
-        )}
+          <Suspense fallback={null}>
 
-        {screen === "add" && (
-          <AddRide
-            onSave={(data) => { addRide(data); setPendingRideDist(0); }}
-            onBack={() => { setScreen("dashboard"); setPendingRideDist(0); }}
-            theme={currentTheme}
-            settings={settings}
-            rateCards={rateCards}
-            initialDist={pendingRideDist}
-          />
-        )}
+            {screen === 'dashboard' && (
+              <Dashboard
+                rides={rides}
+                fuelPercentage={fuelStats.percentage}
+                remainingRange={fuelStats.range}
+                fuelValue={fuelStats.value}
+                currentLiters={fuelStats.currentLiters}
+                navDistance={navDistance}
+                settings={settings}
+                theme={currentTheme}
+                onDelete={(id) => setRides(prev => prev.filter(r => r.id !== id))}
+                onAddRide={() => navigateTo('add')}
+              />
+            )}
 
-        {screen === "fuel" && (
-          <FuelTracking
-            theme={currentTheme}
-            fuelLogs={fuelLogs}
-            onAddFuelLog={(log) => setFuelLogs(prev => [log, ...prev])}
-            settings={settings}
-            navDistance={navDistance}
-            onGoToSettings={() => setScreen("settings")}
-          />
-        )}
+            {screen === 'shifts' && (
+              <ShiftManagement
+                isOnline={isOnline}
+                setIsOnline={handleSetIsOnline}
+                theme={currentTheme}
+                shiftDistance={shiftDistance}
+              />
+            )}
 
-        {screen === "settings" && (
-          <SettingsScreen
-            settings={settings}
-            onSave={setSettings}
-            theme={currentTheme}
-            themeMode={themeMode}
-            onToggleTheme={() => setThemeMode(m => m === 'light' ? 'dark' : 'light')}
-            onOpenRateCard={() => setScreen("ratecard")}
-          />
-        )}
+            {screen === 'navigation' && (
+              <NavigationMap
+                theme={currentTheme}
+                isOnline={isOnline}
+                isRiding={gps.isRiding}
+                rideDistance={gps.rideDistance}
+                shiftDistance={gps.shiftDistance}
+                savedDistance={gps.savedDistance}
+                speed={gps.speed}
+                lastPosition={gps.lastPosition}
+                lastPositionRef={gps.lastPositionRef}
+                geoError={gps.geoError}
+                getRidePath={gps.getRidePath}
+                onStartRide={gps.startRide}
+                onEndRide={gps.endRide}
+              />
+            )}
 
-        {screen === "ratecard" && (
-          <RateCard
-            theme={currentTheme}
-            rateCards={rateCards}
-            onSave={(updated) => { setRateCards(updated); }}
-            onBack={() => setScreen("settings")}
-          />
-        )}
+            {screen === 'fuel' && (
+              <FuelTracking
+                theme={currentTheme}
+                fuelLogs={fuelLogs}
+                // FIX: was onAddLog — FuelTracking.jsx expects onAddFuelLog
+                onAddFuelLog={(log) => setFuelLogs(prev => [log, ...prev])}
+                settings={settings}
+                navDistance={navDistance}
+                onGoToSettings={() => navigateTo('settings')}
+              />
+            )}
 
-        {screen === "navigation" && (
-          <NavigationMap
-            theme={currentTheme}
-            isOnline={isOnline}
-            isRiding={gps.isRiding}
-            rideDistance={gps.rideDistance}
-            shiftDistance={gps.shiftDistance}
-            savedDistance={gps.savedDistance}
-            speed={gps.speed}
-            lastPosition={gps.lastPosition}
-            lastPositionRef={gps.lastPositionRef}
-            geoError={gps.geoError}
-            getRidePath={gps.getRidePath}
-            onStartRide={gps.startRide}
-            onEndRide={gps.endRide}
-          />
-        )}
+            {screen === 'add' && (
+              <AddRide
+                onSave={addRide}
+                onBack={() => { navigateTo('dashboard'); setPendingDist(0); }}
+                theme={currentTheme}
+                settings={settings}
+                rateCards={rateCards}
+                initialDist={pendingDist}
+              />
+            )}
+
+            {screen === 'settings' && (
+              <SettingsScreen
+                settings={settings}
+                onSave={setSettings}
+                theme={currentTheme}
+                themeMode={themeMode}
+                onToggleTheme={() => setThemeMode(m => m === 'light' ? 'dark' : 'light')}
+                onOpenRateCard={() => navigateTo('ratecard')}
+              />
+            )}
+
+            {/* FIX: RateCard screen was completely missing — caused blank screen on Edit Rate Card */}
+            {screen === 'ratecard' && (
+              <RateCard
+                theme={currentTheme}
+                rateCards={rateCards}
+                onSave={(updated) => setRateCards(updated)}
+                onBack={() => navigateTo('settings')}
+              />
+            )}
+
+          </Suspense>
+        </div>
+
+        {/* Bottom navigation */}
+        <nav style={{
+          ...globalStyles.nav,
+          backgroundColor: currentTheme.nav,
+          borderTop: `1px solid ${currentTheme.border}`,
+        }}>
+          <NavButton active={screen === 'dashboard'}  icon="🏠" label="Home"     theme={currentTheme} onClick={() => navigateTo('dashboard')} />
+          <NavButton active={screen === 'shifts'}     icon="⏱️" label="Shifts"   theme={currentTheme} onClick={() => navigateTo('shifts')} />
+          <NavButton active={screen === 'navigation'} icon="📍" label="Map"      theme={currentTheme} onClick={() => navigateTo('navigation')} />
+          <NavButton active={screen === 'fuel'}       icon="⛽" label="Fuel"     theme={currentTheme} onClick={() => navigateTo('fuel')} />
+          <NavButton active={screen === 'settings'}   icon="⚙️" label="Settings" theme={currentTheme} onClick={() => navigateTo('settings')} />
+        </nav>
+
+        <style>{`@keyframes progress { from { width: 0 } to { width: 100% } }`}</style>
+
+
       </div>
-
-      <nav style={{
-        ...globalStyles.nav,
-        backgroundColor: currentTheme.nav,
-        borderTop: `1px solid ${currentTheme.border}`,
-      }}>
-        <NavButton active={screen === 'dashboard'}  icon="🏠" label="Home"     theme={currentTheme} onClick={() => setScreen("dashboard")} />
-        <NavButton active={screen === 'shifts'}     icon="⏱️" label="Shifts"   theme={currentTheme} onClick={() => setScreen("shifts")} />
-        <NavButton active={screen === 'navigation'} icon="📍" label="Map"      theme={currentTheme} onClick={() => setScreen("navigation")} />
-        <NavButton active={screen === 'fuel'}       icon="⛽" label="Fuel"     theme={currentTheme} onClick={() => setScreen("fuel")} />
-        <NavButton active={screen === 'settings'}   icon="⚙️" label="Settings" theme={currentTheme} onClick={() => setScreen("settings")} />
-      </nav>
-    </div>
+    </ErrorBoundary>
   );
 }
