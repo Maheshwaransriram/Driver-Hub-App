@@ -33,11 +33,25 @@ const loadKey = (key) => {
   } catch { return null; }
 };
 
-const saveNavState   = (d) => localStorage.setItem('dh_nav_state',
-  JSON.stringify({ savedDistance: safeNum(d), date: TODAY }));
+// Wrapped in try/catch — localStorage.setItem throws QuotaExceededError when
+// the 5MB browser limit is hit, which previously crashed the entire app.
+const saveNavState = (d) => {
+  try {
+    localStorage.setItem('dh_nav_state',
+      JSON.stringify({ savedDistance: safeNum(d), date: TODAY }));
+  } catch (e) {
+    console.warn('saveNavState: storage full, skipping save.', e);
+  }
+};
 
-const saveShiftState = (shift, riding, ride) => localStorage.setItem('dh_shift_state',
-  JSON.stringify({ shiftDistance: safeNum(shift), isRiding: riding, rideDistance: safeNum(ride), date: TODAY }));
+const saveShiftState = (shift, riding, ride) => {
+  try {
+    localStorage.setItem('dh_shift_state',
+      JSON.stringify({ shiftDistance: safeNum(shift), isRiding: riding, rideDistance: safeNum(ride), date: TODAY }));
+  } catch (e) {
+    console.warn('saveShiftState: storage full, skipping save.', e);
+  }
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 export function useGpsTracking({ isOnline, onDistanceUpdate, onShiftDistanceUpdate, onRideComplete }) {

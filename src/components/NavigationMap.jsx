@@ -57,28 +57,37 @@ export default function NavigationMap({
 
   // 🗺️ Memoized styles (prevents recalc)
   const styles = useMemo(() => ({
+    // Full bleed container — NavigationMap escapes the normal paddingBottom:90px
+    // wrapper by being positioned fixed. This is the only screen that needs this.
     container: {
-      position: 'relative',
-      height: '100vh',
-      width: '100vw',
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: '75px', // leaves room for nav bar (75px from globalStyles.nav)
       overflow: 'hidden',
-      background: 'linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%)'
+      background: '#e8eef2',
+      zIndex: 10, // above normal content, below nav (2000)
     },
-    map: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1 },
+    map: {
+      position: 'absolute',
+      top: 0, left: 0, right: 0, bottom: 0,
+      zIndex: 1,
+    },
     panel: {
       position: 'absolute',
-      bottom: 20,
+      bottom: 16,
       left: 16,
       right: 16,
-      backgroundColor: theme.card || 'rgba(255,255,255,0.95)',
+      backgroundColor: theme.card || 'rgba(17,28,68,0.97)',
       backdropFilter: 'blur(24px) saturate(180%)',
+      WebkitBackdropFilter: 'blur(24px) saturate(180%)',
       borderRadius: 24,
-      padding: '24px',
-      boxShadow: '0 -12px 48px rgba(0,0,0,0.3)',
-      border: `1px solid ${theme.border || 'rgba(0,0,0,0.08)'}`,
-      zIndex: 400,
-      maxWidth: '420px',
-      fontFamily: 'system-ui, -apple-system, sans-serif'
+      padding: '20px 20px 24px',
+      boxShadow: '0 -8px 40px rgba(0,0,0,0.35)',
+      border: `1px solid ${theme.border || 'rgba(255,255,255,0.08)'}`,
+      zIndex: 500, // above map tiles (400) and marker pane (700 in our css override)
+      fontFamily: 'system-ui, -apple-system, sans-serif',
     },
     header: {
       display: 'flex',
@@ -98,14 +107,11 @@ export default function NavigationMap({
     },
     statCard: {
       textAlign: 'center',
-      padding: 16,
+      padding: 14,
       borderRadius: 16,
-      backgroundColor: theme.bg || 'rgba(255,255,255,0.7)',
-      backdropFilter: 'blur(12px)',
-      border: `1px solid ${theme.border || 'rgba(0,0,0,0.05)'}`,
-      transition: 'all 0.3s cubic-bezier(0.4,0,0.2,1)',
-      cursor: 'pointer',
-      ':hover': { transform: 'translateY(-2px)', boxShadow: '0 8px 24px rgba(0,0,0,0.15)' }
+      backgroundColor: theme.bg || 'rgba(11,20,55,0.8)',
+      border: `1px solid ${theme.border || 'rgba(255,255,255,0.07)'}`,
+      transition: 'all 0.2s ease',
     },
     statLabel: {
       fontSize: '11px',
@@ -149,22 +155,22 @@ export default function NavigationMap({
     },
     centerButton: {
       position: 'absolute',
-      bottom: 280,
-      left: 20,
-      width: 56,
-      height: 56,
+      bottom: 260, // sits above the panel (panel ~220px tall + 16px gap + buffer)
+      left: 16,
+      width: 48,
+      height: 48,
       borderRadius: '50%',
-      backgroundColor: theme.card || '#ffffff',
-      border: `3px solid ${isCentered ? (theme.border || 'rgba(0,0,0,0.1)') : '#6366f1'}`,
-      boxShadow: '0 12px 32px rgba(0,0,0,0.25), 0 0 0 4px rgba(255,255,255,0.9)',
-      zIndex: 401,
+      backgroundColor: theme.card || '#1a2744',
+      border: `2.5px solid ${isCentered ? (theme.border || 'rgba(255,255,255,0.15)') : '#6366f1'}`,
+      boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+      zIndex: 501,
       cursor: 'pointer',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      fontSize: '22px',
-      transition: 'all 0.4s cubic-bezier(0.4,0,0.2,1)',
-      transform: isCentered ? 'scale(1) rotate(0deg)' : 'scale(1.15) rotate(15deg)'
+      fontSize: '20px',
+      transition: 'all 0.3s ease',
+      transform: isCentered ? 'scale(1)' : 'scale(1.1)',
     },
     errorBanner: {
       position: 'absolute',
@@ -185,47 +191,54 @@ export default function NavigationMap({
     }
   }), [theme, isRiding, isOnline, isPending, isCentered]);
 
-  // 🗺️ Map Initialization (optimized)
+  // 🗺️ Map Initialization
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
     const map = L.map(mapContainerRef.current, {
       zoomControl: false,
       attributionControl: false,
-      zoomAnimation: true,
-      fadeAnimation: true,
-      markerZoomAnimation: true,
-      preferCanvas: true // 2x faster rendering
-    }).setView(DEFAULT_LOCATION, 16);
+      preferCanvas: true,
+    }).setView(DEFAULT_LOCATION, 15);
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      attribution: '© OpenStreetMap contributors',
-      detectRetina: true
+      detectRetina: true,
     }).addTo(map);
 
     polylineRef.current = L.polyline([], {
       color: '#6366f1',
-      weight: 8,
+      weight: 6,
       opacity: 0.9,
       lineJoin: 'round',
       lineCap: 'round',
-      smoothFactor: 1,
-      dashArray: '8, 4' // Subtle dash for better visibility
     }).addTo(map);
 
-    // Interactions
     map.on('dragstart zoomstart', () => setIsCenteredBoth(false));
 
-    // Initial GPS with better UX
-    navigator.geolocation.getCurrentPosition(
-      ({ coords }) => {
-        const pos = [coords.latitude, coords.longitude];
-        map.flyTo(pos, 16, { duration: 1.2, paddingBottomRight: [0, 280] });
-      },
-      undefined,
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
-    );
+    // Get initial position — create marker here immediately so it shows on load
+    // even before the hook's watchPosition fires its first update
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        ({ coords }) => {
+          const pos = [coords.latitude, coords.longitude];
+          if (!mapRef.current) return;
+          map.setView(pos, 16);
+          // Create the marker immediately — single source of truth
+          if (!markerRef.current) {
+            markerRef.current = L.marker(pos, {
+              icon: makeMarkerIcon(),
+              zIndexOffset: 1000,
+            }).addTo(map);
+          }
+        },
+        () => {
+          // If GPS denied on map init, still show map (centered on default)
+          map.setView(DEFAULT_LOCATION, 14);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+      );
+    }
 
     mapRef.current = map;
 
@@ -237,26 +250,22 @@ export default function NavigationMap({
     };
   }, [setIsCenteredBoth]);
 
-  // 🔵 GPS MARKER - Production optimized
+  // 🔵 GPS MARKER — syncs from hook's lastPosition (updated by watchPosition in App)
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (!mapRef.current || !lastPosition) return; // wait for real GPS fix
 
-    const coord = lastPosition || DEFAULT_LOCATION;
-    
-    // Smart auto-center (only when tracking)
+    const coord = lastPosition; // always a valid [lat, lng] array from the hook
+
+    // Auto-pan only when shift is active and user hasn't manually panned away
     if (isCenteredRef.current && isOnline) {
-      mapRef.current.panTo(coord, { 
-        animate: true, 
-        duration: 0.8,
-        easeLinearity: 0.3 
-      });
+      mapRef.current.panTo(coord, { animate: true, duration: 0.6 });
     }
 
-    // Always show marker
+    // Create-or-update — single marker, never duplicate
     if (!markerRef.current) {
       markerRef.current = L.marker(coord, {
         icon: makeMarkerIcon(),
-        zIndexOffset: 1000
+        zIndexOffset: 1000,
       }).addTo(mapRef.current);
     } else {
       markerRef.current.setLatLng(coord);
@@ -271,20 +280,12 @@ export default function NavigationMap({
     polylineRef.current.setLatLngs(path);
   }, [isRiding, rideDistance, getRidePath]);
 
-  // 🎯 Center Button - Enhanced
+  // 🎯 Center on current GPS position
   const centerOnMe = useCallback(() => {
-    const pos = lastPositionRef?.current || 
-               lastPosition || 
-               (mapRef.current?.getCenter() || DEFAULT_LOCATION);
-    
-    if (mapRef.current) {
-      mapRef.current.flyTo(pos, 16, { 
-        animate: true, 
-        duration: 1.2,
-        paddingTopLeft: [20, 20],
-        paddingBottomRight: [20, 300]
-      });
-    }
+    // lastPositionRef.current is a [lat,lng] array (proper React ref from hook)
+    const pos = lastPositionRef?.current || lastPosition;
+    if (!pos || !mapRef.current) return;
+    mapRef.current.flyTo(pos, 16, { animate: true, duration: 0.8 });
     setIsCenteredBoth(true);
   }, [lastPosition, lastPositionRef, setIsCenteredBoth]);
 
@@ -306,19 +307,32 @@ export default function NavigationMap({
       <style>{`
         @keyframes gps-pulse {
           0%,100%{opacity:1;transform:scale(1)}
-          50%{opacity:0.4;transform:scale(1.4)}
+          50%{opacity:0.35;transform:scale(1.5)}
         }
         @keyframes gps-ring {
-          0%{transform:scale(0.8);opacity:1;box-shadow:0 0 0 0 rgba(99,102,241,0.7)}
-          70%{transform:scale(1.8);opacity:0.3}
-          100%{transform:scale(2.5);opacity:0;box-shadow:0 0 0 20px rgba(99,102,241,0)}
+          0%{transform:scale(0.6);opacity:1}
+          100%{transform:scale(2.2);opacity:0}
         }
         @keyframes spin{to{transform:rotate(360deg)}}
-        .gps-marker{transform:translate(-50%,-50%)!important}
-        .leaflet-container{font:600 16px system-ui,-apple-system,sans-serif}
-        .leaflet-pane{z-index:1!important}
-        .leaflet-marker-pane{z-index:700!important}
-        .leaflet-overlay-pane{z-index:800!important}
+
+        /* Marker centering — Leaflet adds its own transform, we must not fight it */
+        .gps-marker {
+          background: none !important;
+          border: none !important;
+        }
+
+        /* Keep Leaflet's internal z-index stacking intact.
+           DO NOT override .leaflet-pane globally — it hides markers.
+           Only push the entire map below the nav bar via the container. */
+        .leaflet-container {
+          font-family: system-ui, -apple-system, sans-serif;
+        }
+        .leaflet-tile-pane { z-index: 200 !important; }
+        .leaflet-shadow-pane { z-index: 499 !important; }
+        .leaflet-overlay-pane { z-index: 400 !important; }
+        .leaflet-marker-pane { z-index: 600 !important; }
+        .leaflet-tooltip-pane { z-index: 650 !important; }
+        .leaflet-popup-pane { z-index: 700 !important; }
       `}</style>
 
       <div style={styles.container}>

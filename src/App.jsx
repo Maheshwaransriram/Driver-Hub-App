@@ -8,6 +8,9 @@ import NavButton from "./components/NavButton";
 import FuelTracking from "./components/FuelTracking";
 import NavigationMap from "./components/NavigationMap";
 import { themes, globalStyles } from "./theme/theme";
+import GlobalMenu from "./components/GlobalMenu";
+import Analytics from "./components/Analytics";
+import Tips from "./components/Tips";
 import { useGpsTracking } from "./hooks/UseGpsTracking";
 
 const DEFAULT_SETTINGS = {
@@ -142,6 +145,12 @@ export default function App() {
   const [shiftDistance, setShiftDistance] = useState(0);
   const [pendingDist,   setPendingDist]   = useState(0);
   const [themeMode,     setThemeMode]     = useState(initial.themeMode);
+  const [analyticsTab,  setAnalyticsTab]  = useState('earnings');
+  const [tipsTab,       setTipsTab]       = useState('fuel');
+  const [shiftHistory,  setShiftHistory]  = useState(() => {
+    try { return JSON.parse(localStorage.getItem('dh_shift_history') || '[]'); }
+    catch { return []; }
+  });
 
   // ── Persistence ─────────────────────────────────────────────────────────
   useEffect(() => { safeSet('dh_rides',      rides);      }, [rides]);
@@ -283,7 +292,13 @@ export default function App() {
   }, []);
 
   // ── Navigation helper ────────────────────────────────────────────────────
-  const navigateTo = useCallback((s) => startTransition(() => setScreen(s)), []);
+  const navigateTo = useCallback((s, tab) => {
+    startTransition(() => {
+      setScreen(s);
+      if (s === 'analytics' && tab) setAnalyticsTab(tab);
+      if (s === 'tips'      && tab) setTipsTab(tab);
+    });
+  }, []);
 
   const todayRides     = rides.filter(r => new Date(r.timestamp).toDateString() === TODAY);
   const todayNetProfit = todayRides.reduce((s, r) => s + safeFloat(r.net), 0);
@@ -292,6 +307,34 @@ export default function App() {
   return (
     <ErrorBoundary>
       <div style={{ ...globalStyles.appWrapper, backgroundColor: currentTheme.bg, color: currentTheme.text }}>
+
+        {/* Global hamburger menu — present on every screen */}
+        <GlobalMenu
+          theme={currentTheme}
+          navigateTo={navigateTo}
+          screen={screen}
+        />
+
+        {/* NavigationMap renders OUTSIDE the container — it manages its own
+            full-bleed fixed layout to avoid the paddingBottom:90px constraint */}
+        {screen === 'navigation' && (
+          <NavigationMap
+            theme={currentTheme}
+            isOnline={isOnline}
+            isRiding={gps.isRiding}
+            rideDistance={gps.rideDistance}
+            shiftDistance={gps.shiftDistance}
+            savedDistance={gps.savedDistance}
+            speed={gps.speed}
+            lastPosition={gps.lastPosition}
+            lastPositionRef={gps.lastPositionRef}
+            geoError={gps.geoError}
+            getRidePath={gps.getRidePath}
+            onStartRide={gps.startRide}
+            onEndRide={gps.endRide}
+          />
+        )}
+
         <div style={globalStyles.container}>
 
           {/* Loading overlay during screen transitions */}
@@ -322,24 +365,8 @@ export default function App() {
                 setIsOnline={handleSetIsOnline}
                 theme={currentTheme}
                 shiftDistance={shiftDistance}
-              />
-            )}
-
-            {screen === 'navigation' && (
-              <NavigationMap
-                theme={currentTheme}
-                isOnline={isOnline}
-                isRiding={gps.isRiding}
-                rideDistance={gps.rideDistance}
-                shiftDistance={gps.shiftDistance}
-                savedDistance={gps.savedDistance}
-                speed={gps.speed}
-                lastPosition={gps.lastPosition}
-                lastPositionRef={gps.lastPositionRef}
-                geoError={gps.geoError}
-                getRidePath={gps.getRidePath}
-                onStartRide={gps.startRide}
-                onEndRide={gps.endRide}
+                todayRideCount={todayRides.length}
+                onHistoryUpdate={setShiftHistory}
               />
             )}
 
@@ -384,6 +411,26 @@ export default function App() {
                 rateCards={rateCards}
                 onSave={(updated) => setRateCards(updated)}
                 onBack={() => navigateTo('settings')}
+              />
+            )}
+
+            {screen === 'analytics' && (
+              <Analytics
+                rides={rides}
+                fuelLogs={fuelLogs}
+                shiftHistory={shiftHistory}
+                settings={settings}
+                theme={currentTheme}
+                initialTab={analyticsTab}
+                onBack={() => navigateTo('dashboard')}
+              />
+            )}
+
+            {screen === 'tips' && (
+              <Tips
+                theme={currentTheme}
+                initialTab={tipsTab}
+                onBack={() => navigateTo('dashboard')}
               />
             )}
 

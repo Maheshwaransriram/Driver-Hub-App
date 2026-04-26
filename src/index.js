@@ -1,17 +1,17 @@
 import React from 'react';
-import ReactDOM from 'react-dom/client';
-import './index.css';
+import { createRoot } from 'react-dom/client';
 import App from './App';
-import reportWebVitals from './reportWebVitals';
+import ErrorBoundary from './ErrorBoundary';
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
+/**
+ * ErrorBoundary wraps App here — at the ROOT level — so it catches errors thrown
+ * by App itself (e.g. localStorage quota crash, GPS notification exception).
+ * Previously the boundary lived inside App's return(), where it could only catch
+ * errors in App's children, not in App itself — causing blank screens.
+ */
+const root = createRoot(document.getElementById('root'));
 root.render(
-  <React.StrictMode>
+  <ErrorBoundary>
     <App />
-  </React.StrictMode>
+  </ErrorBoundary>
 );
-
-// If you want to start measuring performance in your app, pass a function
-// to log results (for example: reportWebVitals(console.log))
-// or send to an analytics endpoint. Learn more: https://bit.ly/CRA-vitals
-reportWebVitals();

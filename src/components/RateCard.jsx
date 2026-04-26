@@ -194,7 +194,7 @@ export default function RateCard({ theme, rateCards, onSave, onBack }) {
 
   const rowStyle = {
     display: 'flex', justifyContent: 'space-between',
-    alignItems: 'center', paddingVertical: '6px',
+    alignItems: 'center', paddingTop: '6px', paddingBottom: '6px', // was paddingVertical — React Native only, ignored on web
     marginBottom: '10px',
   };
 

@@ -34,14 +34,20 @@ export default function NavButton({ active, icon, label, theme, onClick }) {
         // Active state background
         backgroundColor: active ? 'rgba(16, 185, 129, 0.1)' : 'transparent',
         borderRadius: '12px',
-        // Hover/focus states
-        ':hover': {
-          backgroundColor: active 
-            ? 'rgba(16, 185, 129, 0.15)' 
-            : 'rgba(0, 0, 0, 0.05)'
-        }
+        // ':hover' keys in inline styles are silently ignored by React.
+        // Hover is handled via onMouseEnter/onMouseLeave below.
       }}
       // Keyboard accessibility
+      onMouseEnter={(e) => {
+        e.currentTarget.style.backgroundColor = active
+          ? 'rgba(16, 185, 129, 0.15)'
+          : 'rgba(0, 0, 0, 0.05)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.backgroundColor = active
+          ? 'rgba(16, 185, 129, 0.1)'
+          : 'transparent';
+      }}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();

@@ -316,30 +316,31 @@ export default function AddRide({
                 key={p.id}
                 onClick={() => setPlatform(p.id)}
                 style={{
-                  flex: p.primary ? '1 1 48%' : '1 1 30%',
-                  padding: '16px 12px',
-                  borderRadius: '16px',
-                  border: `3px solid ${active ? p.color : theme.border}`,
+                  flex: '1 1 28%',
+                  padding: '10px 6px',
+                  borderRadius: '12px',
+                  border: `2px solid ${active ? p.color : theme.border}`,
                   background: active ? `${p.color}20` : theme.bg,
                   cursor: 'pointer',
-                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                  transition: 'all 0.2s ease',
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
-                  gap: '6px',
-                  minHeight: '72px',
-                  transform: active ? 'scale(1.02)' : 'scale(1)',
-                  boxShadow: active ? `0 8px 24px ${p.color}40` : 'none'
+                  gap: '4px',
+                  minHeight: '56px',
+                  transform: active ? 'scale(1.03)' : 'scale(1)',
+                  boxShadow: active ? `0 4px 14px ${p.color}40` : 'none'
                 }}
                 aria-label={`Select ${p.id} platform`}
                 aria-pressed={active}
               >
-                <span style={{ fontSize: '24px' }}>{p.emoji}</span>
+                <span style={{ fontSize: '18px', lineHeight: 1 }}>{p.emoji}</span>
                 <span style={{ 
-                  fontSize: '12px', 
-                  fontWeight: '900', 
-                  color: active ? 'white' : p.color,
-                  textAlign: 'center'
+                  fontSize: '10px', 
+                  fontWeight: '800', 
+                  color: active ? p.color : theme.subText,
+                  textAlign: 'center',
+                  letterSpacing: '0.3px'
                 }}>
                   {p.id}
                 </span>
@@ -385,8 +386,8 @@ export default function AddRide({
           />
         </div>
 
-        {/* Secondary inputs */}
-        <div style={{ display: 'flex', gap: '16px', marginBottom: '20px' }}>
+        {/* Secondary inputs — split into 2 rows so fields are not cramped on mobile */}
+        <div style={{ display: 'flex', gap: '12px', marginBottom: '12px' }}>
           <NumberInput
             label="Trip Time"
             value={timeMin}
@@ -398,25 +399,40 @@ export default function AddRide({
             theme={theme}
           />
           <NumberInput
-            label="Extra Income"
+            label="Tips"
             value={extraFare}
             onChange={setExtraFare}
-            placeholder="15"
+            placeholder="0"
             prefix="₹"
             color="#10B981"
-            inputStyle={inputStyle}
-            labelStyle={labelStyle}
+            inputStyle={{
+              ...inputStyle,
+              // Make Tips field visible: explicit border + background so it
+              // doesn't blend into the card on dark theme
+              border: `2px solid ${theme.accent}60`,
+              background: theme.bg,
+              color: theme.text,
+            }}
+            labelStyle={{ ...labelStyle, color: '#10B981' }}
             theme={theme}
           />
+        </div>
+        {/* Deductions — full width row so ₹ prefix and value are clearly visible */}
+        <div style={{ marginBottom: '20px' }}>
           <NumberInput
             label="Deductions"
             value={extraDeduct}
             onChange={setExtraDeduct}
-            placeholder="5"
+            placeholder="0"
             prefix="₹"
             color="#EF4444"
-            inputStyle={inputStyle}
-            labelStyle={labelStyle}
+            inputStyle={{
+              ...inputStyle,
+              border: `2px solid #EF444460`,
+              background: theme.bg,
+              color: theme.text,
+            }}
+            labelStyle={{ ...labelStyle, color: '#EF4444' }}
             theme={theme}
           />
         </div>
