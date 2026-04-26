@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, useTransition, useMemo } from "react";
+import React, { useEffect, useRef, useState, useCallback, useTransition, useMemo } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -20,13 +21,38 @@ const makeMarkerIcon = () => L.divIcon({
       border:3px solid #fff;box-shadow:0 0 16px rgba(99,102,241,0.8);
       position:relative;z-index:2;animation:gps-pulse 1.5s infinite;
     "></div>
+  className: 'gps-marker',
+  html: `<div style="
+    width:24px;height:24px;position:relative;display:flex;
+    align-items:center;justify-content:center;
+  ">
+    <div style="
+      position:absolute;width:24px;height:24px;border-radius:50%;
+      background:linear-gradient(135deg,rgba(99,102,241,0.3),rgba(99,102,241,0.15));
+      border:2px solid rgba(99,102,241,0.7);animation:gps-ring 2s ease-out infinite;
+    "></div>
+    <div style="
+      width:14px;height:14px;border-radius:50%;background:#6366f1;
+      border:3px solid #fff;box-shadow:0 0 16px rgba(99,102,241,0.8);
+      position:relative;z-index:2;animation:gps-pulse 1.5s infinite;
+    "></div>
   </div>`,
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+  shadowSize: [0, 0]
   iconSize: [24, 24],
   iconAnchor: [12, 12],
   shadowSize: [0, 0]
 });
 
 export default function NavigationMap({
+  theme = {},
+  isOnline = false,
+  isRiding = false,
+  rideDistance = 0,
+  shiftDistance = 0,
+  savedDistance = 0,
+  speed = 0,
   theme = {},
   isOnline = false,
   isRiding = false,
@@ -42,13 +68,22 @@ export default function NavigationMap({
   onEndRide,
 }) {
   const [isPending, startTransition] = useTransition();
+  const [isPending, startTransition] = useTransition();
   const mapContainerRef = useRef(null);
+  const mapRef = useRef(null);
+  const markerRef = useRef(null);
+  const polylineRef = useRef(null);
+  const isCenteredRef = useRef(true);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
   const polylineRef = useRef(null);
   const isCenteredRef = useRef(true);
   const [isCentered, setIsCentered] = useState(true);
 
+  // 🔧 Optimized centering
+  const setIsCenteredBoth = useCallback((centered) => {
+    isCenteredRef.current = centered;
+    setIsCentered(centered);
   // 🔧 Optimized centering
   const setIsCenteredBoth = useCallback((centered) => {
     isCenteredRef.current = centered;
@@ -247,6 +282,10 @@ export default function NavigationMap({
       mapRef.current = null;
       markerRef.current = null;
       polylineRef.current = null;
+      map.remove();
+      mapRef.current = null;
+      markerRef.current = null;
+      polylineRef.current = null;
     };
   }, [setIsCenteredBoth]);
 
@@ -271,7 +310,9 @@ export default function NavigationMap({
       markerRef.current.setLatLng(coord);
     }
   }, [lastPosition, isOnline]);
+  }, [lastPosition, isOnline]);
 
+  // 🛤️ Ride Path - Optimized
   // 🛤️ Ride Path - Optimized
   useEffect(() => {
     if (!polylineRef.current || !getRidePath) return;
@@ -301,8 +342,21 @@ export default function NavigationMap({
   const speedColor = speed > 80 ? '#EF4444' : 
                     speed > 50 ? '#F59E0B' : 
                     speed > 20 ? '#FBBF24' : '#10B981';
+  const handleRideToggle = useCallback(() => {
+    if (!isOnline) return;
+    startTransition(() => {
+      if (isRiding) onEndRide?.();
+      else onStartRide?.();
+    });
+  }, [isRiding, isOnline, onStartRide, onEndRide, startTransition]);
+
+  // 🧮 Speed visualization
+  const speedColor = speed > 80 ? '#EF4444' : 
+                    speed > 50 ? '#F59E0B' : 
+                    speed > 20 ? '#FBBF24' : '#10B981';
 
   return (
+    <>
     <>
       <style>{`
         @keyframes gps-pulse {
@@ -337,6 +391,8 @@ export default function NavigationMap({
 
       <div style={styles.container}>
         <div ref={mapContainerRef} style={styles.map} aria-label="Live GPS tracking map" />
+      <div style={styles.container}>
+        <div ref={mapContainerRef} style={styles.map} aria-label="Live GPS tracking map" />
 
         {geoError && (
           <div style={styles.errorBanner} role="alert" aria-live="assertive">
@@ -345,7 +401,22 @@ export default function NavigationMap({
             <small>Using estimated location</small>
           </div>
         )}
+        {geoError && (
+          <div style={styles.errorBanner} role="alert" aria-live="assertive">
+            📍 GPS Unavailable
+            <br />
+            <small>Using estimated location</small>
+          </div>
+        )}
 
+        <button
+          onClick={centerOnMe}
+          style={styles.centerButton}
+          aria-label={isCentered ? "Map centered on location" : "Recenter map"}
+          title="Recenter on GPS"
+        >
+          {isCentered ? '📍' : '🎯'}
+        </button>
         <button
           onClick={centerOnMe}
           style={styles.centerButton}
@@ -388,6 +459,39 @@ export default function NavigationMap({
               </div>
             )}
           </div>
+        <div style={styles.panel} role="complementary" aria-label="Ride controls">
+          {/* Status Header */}
+          <div style={styles.header}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              fontSize: 13, fontWeight: 800,
+              color: isOnline ? '#059669' : (theme?.subText || '#94a3b8'),
+              textTransform: 'uppercase', letterSpacing: '0.5px'
+            }}>
+              <div style={{
+                width: 12, height: 12, borderRadius: '50%',
+                background: isOnline ? '#059669' : (theme?.subText || '#94a3b8'),
+                boxShadow: isOnline ? '0 0 20px rgba(5,150,105,0.6)' : 'none',
+                animation: isOnline ? 'gps-pulse 1.5s infinite' : 'none'
+              }} />
+              {isOnline ? 'LIVE SHIFT' : 'SHIFT OFFLINE'}
+            </div>
+            {isRiding && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                fontSize: 13, fontWeight: 800,
+                color: '#D97706', textTransform: 'uppercase', letterSpacing: '0.5px'
+              }}>
+                <div style={{
+                  width: 12, height: 12, borderRadius: '50%',
+                  background: '#D97706',
+                  boxShadow: '0 0 20px rgba(217,119,6,0.6)',
+                  animation: 'gps-pulse 1.5s infinite'
+                }} />
+                RIDE ACTIVE
+              </div>
+            )}
+          </div>
 
           {/* Stats */}
           <div style={styles.statsGrid}>
@@ -395,7 +499,17 @@ export default function NavigationMap({
               <div style={styles.statLabel}>Current Ride</div>
               <div style={styles.statValue}>{(rideDistance || 0).toFixed(1)}</div>
               <div style={styles.statUnit}>km</div>
+          {/* Stats */}
+          <div style={styles.statsGrid}>
+            <div style={styles.statCard}>
+              <div style={styles.statLabel}>Current Ride</div>
+              <div style={styles.statValue}>{(rideDistance || 0).toFixed(1)}</div>
+              <div style={styles.statUnit}>km</div>
             </div>
+            <div style={styles.statCard}>
+              <div style={styles.statLabel}>Shift Total</div>
+              <div style={styles.statValue}>{(shiftDistance || 0).toFixed(1)}</div>
+              <div style={styles.statUnit}>km</div>
             <div style={styles.statCard}>
               <div style={styles.statLabel}>Shift Total</div>
               <div style={styles.statValue}>{(shiftDistance || 0).toFixed(1)}</div>
@@ -409,7 +523,41 @@ export default function NavigationMap({
               <div style={styles.statUnit}>km/h</div>
             </div>
           </div>
+            <div style={styles.statCard}>
+              <div style={styles.statLabel}>Live Speed</div>
+              <div style={{...styles.statValue, color: speedColor}}>
+                {Math.round(speed || 0)}
+              </div>
+              <div style={styles.statUnit}>km/h</div>
+            </div>
+          </div>
 
+          {/* Main Action */}
+          <button
+            onClick={handleRideToggle}
+            disabled={!isOnline || isPending}
+            style={styles.rideButton}
+            aria-label={isRiding ? "End ride and log earnings" : "Start new ride"}
+            aria-pressed={isRiding}
+          >
+            {isPending ? (
+              <>
+                <div style={{
+                  width: 20, height: 20,
+                  border: '2px solid rgba(255,255,255,0.3)',
+                  borderTop: '2px solid white',
+                  borderRadius: '50%',
+                  animation: 'spin 0.8s linear infinite',
+                  display: 'inline-block', marginRight: 10
+                }} />
+                Saving...
+              </>
+            ) : isRiding ? (
+              '🏁 End Ride & Save'
+            ) : (
+              '🏍️ Start Ride'
+            )}
+          </button>
           {/* Main Action */}
           <button
             onClick={handleRideToggle}
@@ -447,7 +595,28 @@ export default function NavigationMap({
               👆 Start shift to enable tracking
             </p>
           )}
+          {/* Helper text */}
+          {!isOnline && (
+            <p style={{
+              textAlign: 'center', fontSize: 13,
+              color: theme?.subText || '#94a3b8',
+              marginTop: 16, fontWeight: 600, lineHeight: 1.4
+            }}>
+              👆 Start shift to enable tracking
+            </p>
+          )}
 
+          {savedDistance > 0 && !isRiding && (
+            <p style={{
+              textAlign: 'center', marginTop: 12,
+              fontSize: 13, color: '#059669', fontWeight: 800
+            }}>
+              💾 {savedDistance.toFixed(1)}km saved today
+            </p>
+          )}
+        </div>
+      </div>
+    </>
           {savedDistance > 0 && !isRiding && (
             <p style={{
               textAlign: 'center', marginTop: 12,

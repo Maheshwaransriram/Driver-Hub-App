@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useTransition, Suspense, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useTransition, Suspense, useMemo } from "react";
 import Dashboard from "./components/Dashboard";
 import ShiftManagement from "./components/ShiftManagement";
 import SettingsScreen from "./components/SettingsScreen";
@@ -171,7 +172,10 @@ export default function App() {
 }, []);
 
   // ── GPS hook — lives at App level, never stops on screen change ───────────
+  // ── GPS hook — lives at App level, never stops on screen change ───────────
   const handleRideComplete = useCallback((distKm) => {
+    setPendingDist(distKm);
+    startTransition(() => setScreen('add'));
     setPendingDist(distKm);
     startTransition(() => setScreen('add'));
   }, []);
@@ -180,9 +184,17 @@ export default function App() {
     isOnline,
     onDistanceUpdate:      useCallback((km) => setNavDistance(km), []),
     onShiftDistanceUpdate: useCallback((km) => setShiftDistance(km), []),
+    onDistanceUpdate:      useCallback((km) => setNavDistance(km), []),
+    onShiftDistanceUpdate: useCallback((km) => setShiftDistance(km), []),
     onRideComplete:        handleRideComplete,
   });
 
+  // ── Theme ────────────────────────────────────────────────────────────────
+  const currentTheme = themes[themeMode] || themes.dark;
+
+  // ── Fuel gauge calculation ───────────────────────────────────────────────
+  const fuelStats = useMemo(() => {
+    if (!fuelLogs.length) return { percentage: 0, range: 0, value: 0, currentLiters: 0 };
   // ── Theme ────────────────────────────────────────────────────────────────
   const currentTheme = themes[themeMode] || themes.dark;
 
@@ -198,11 +210,27 @@ export default function App() {
       : rides.reduce((s, r) => s + safeFloat(r.dist), 0);
     const consumed           = totalDist / mileage;
     const remainingLiters    = Math.max(0, totalLiters - consumed);
+    const mileage   = Math.max(1, settings.mileage   || 45);
+    const fuelPrice = Math.max(1, settings.fuelPrice  || 103);
+    const totalLiters    = fuelLogs.reduce((s, l) => s + safeFloat(l.liters), 0);
+    const totalDist      = navDistance > 0
+      ? navDistance
+      : rides.reduce((s, r) => s + safeFloat(r.dist), 0);
+    const consumed           = totalDist / mileage;
+    const remainingLiters    = Math.max(0, totalLiters - consumed);
 
     const lastLog         = fuelLogs[0];
     const lastFillRange   = safeFloat(lastLog.liters) * mileage;
     const distBeforeLast  = rides
+    const lastLog         = fuelLogs[0];
+    const lastFillRange   = safeFloat(lastLog.liters) * mileage;
+    const distBeforeLast  = rides
       .filter(r => r.id < lastLog.id)
+      .reduce((s, r) => s + safeFloat(r.dist), 0);
+    const prevLiters      = fuelLogs.slice(1).reduce((s, l) => s + safeFloat(l.liters), 0);
+    const rangeBeforeLast = Math.max(0, prevLiters * mileage - distBeforeLast);
+    const maxRange        = lastFillRange + rangeBeforeLast;
+    const percentage      = maxRange > 0 ? (remainingLiters * mileage / maxRange) * 100 : 0;
       .reduce((s, r) => s + safeFloat(r.dist), 0);
     const prevLiters      = fuelLogs.slice(1).reduce((s, l) => s + safeFloat(l.liters), 0);
     const rangeBeforeLast = Math.max(0, prevLiters * mileage - distBeforeLast);
@@ -216,7 +244,14 @@ export default function App() {
       currentLiters: Math.max(0, remainingLiters),
     };
   }, [fuelLogs, navDistance, rides, settings]);
+      percentage:    Math.min(100, Math.max(0, percentage)),
+      range:         Math.max(0, remainingLiters * mileage),
+      value:         Math.max(0, remainingLiters * fuelPrice),
+      currentLiters: Math.max(0, remainingLiters),
+    };
+  }, [fuelLogs, navDistance, rides, settings]);
 
+  // ── Fuel alert ───────────────────────────────────────────────────────────
   // ── Fuel alert ───────────────────────────────────────────────────────────
   useEffect(() => {
     if (!fuelLogs.length || fuelStats.range > 16) return;
@@ -232,18 +267,31 @@ export default function App() {
   // ── addRide — full fare calculation ──────────────────────────────────────
   // FIX: was just storing raw onSave data without calculating deductions
   const addRide = useCallback((rideData) => {
+  // ── addRide — full fare calculation ──────────────────────────────────────
+  // FIX: was just storing raw onSave data without calculating deductions
+  const addRide = useCallback((rideData) => {
     const rc       = rateCards[rideData.platform] || DEFAULT_RATE_CARDS[rideData.platform] || DEFAULT_RATE_CARDS.Rapido;
     const isNight  = (() => { const h = new Date().getHours(); return h >= 23 || h < 6; })();
     const calc     = calculateFareFromRateCard(rc, rideData.dist, rideData.timeMin || 0, isNight);
     const fuelCost      = (safeFloat(rideData.dist) / Math.max(1, settings.mileage)) * settings.fuelPrice;
     const extraFareN    = safeFloat(rideData.extraFare);
     const extraDeductN  = safeFloat(rideData.extraDeduct);
+    const fuelCost      = (safeFloat(rideData.dist) / Math.max(1, settings.mileage)) * settings.fuelPrice;
+    const extraFareN    = safeFloat(rideData.extraFare);
+    const extraDeductN  = safeFloat(rideData.extraDeduct);
 
     let finalFare, commAmt, govtTax, platformFee, thirdPartyFee, net;
 
+
     if (rideData.fare > 0) {
       finalFare     = safeFloat(rideData.fare);
+      finalFare     = safeFloat(rideData.fare);
       commAmt       = rc?.commissionType === 'flat'
+        ? safeFloat(rc?.commission)
+        : finalFare * safeFloat(rc?.commission) / 100;
+      govtTax       = finalFare * safeFloat(rc?.govtTaxPercent) / 100;
+      platformFee   = safeFloat(rc?.platformFee);
+      thirdPartyFee = safeFloat(rc?.thirdPartyFee);
         ? safeFloat(rc?.commission)
         : finalFare * safeFloat(rc?.commission) / 100;
       govtTax       = finalFare * safeFloat(rc?.govtTaxPercent) / 100;
@@ -256,9 +304,12 @@ export default function App() {
       govtTax       = calc.gst;
       platformFee   = safeFloat(rc?.platformFee);
       thirdPartyFee = safeFloat(rc?.thirdPartyFee);
+      platformFee   = safeFloat(rc?.platformFee);
+      thirdPartyFee = safeFloat(rc?.thirdPartyFee);
       net = calc.net + extraFareN - extraDeductN - fuelCost;
     }
 
+    const ride = {
     const ride = {
       ...rideData,
       id:            Date.now(),
@@ -272,7 +323,19 @@ export default function App() {
       extraDeduct:   parseFloat((extraDeductN  || 0).toFixed(2)),
       fuelCost:      parseFloat((fuelCost      || 0).toFixed(2)),
       dist:          parseFloat((safeFloat(rideData.dist)).toFixed(3)),
+      fare:          parseFloat((finalFare     || 0).toFixed(2)),
+      net:           parseFloat((net           || 0).toFixed(2)),
+      commAmt:       parseFloat((commAmt       || 0).toFixed(2)),
+      taxAmt:        parseFloat((govtTax       || 0).toFixed(2)),
+      platformFee:   parseFloat((platformFee   || 0).toFixed(2)),
+      thirdPartyFee: parseFloat((thirdPartyFee || 0).toFixed(2)),
+      extraFare:     parseFloat((extraFareN    || 0).toFixed(2)),
+      extraDeduct:   parseFloat((extraDeductN  || 0).toFixed(2)),
+      fuelCost:      parseFloat((fuelCost      || 0).toFixed(2)),
+      dist:          parseFloat((safeFloat(rideData.dist)).toFixed(3)),
       isNight,
+      timestamp: new Date().toISOString(),
+    };
       timestamp: new Date().toISOString(),
     };
 
@@ -280,7 +343,13 @@ export default function App() {
     setPendingDist(0);
     startTransition(() => setScreen('dashboard'));
   }, [rateCards, settings]);
+    setRides(prev => [ride, ...prev]);
+    setPendingDist(0);
+    startTransition(() => setScreen('dashboard'));
+  }, [rateCards, settings]);
 
+  // ── Shift end ────────────────────────────────────────────────────────────
+  const handleSetIsOnline = useCallback((val) => {
   // ── Shift end ────────────────────────────────────────────────────────────
   const handleSetIsOnline = useCallback((val) => {
     setIsOnline(val);
@@ -288,7 +357,10 @@ export default function App() {
       setShiftDistance(0);
       localStorage.removeItem('dh_shift_state');
       localStorage.removeItem('dh_shift_online');
+      localStorage.removeItem('dh_shift_state');
+      localStorage.removeItem('dh_shift_online');
     }
+  }, []);
   }, []);
 
   // ── Navigation helper ────────────────────────────────────────────────────
@@ -303,6 +375,7 @@ export default function App() {
   const todayRides     = rides.filter(r => new Date(r.timestamp).toDateString() === TODAY);
   const todayNetProfit = todayRides.reduce((s, r) => s + safeFloat(r.net), 0);
 
+  // ─────────────────────────────────────────────────────────────────────────
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <ErrorBoundary>
